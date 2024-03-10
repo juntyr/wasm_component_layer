@@ -28,4 +28,4 @@ serde = [ "dep:serde", "semver/serde" ]
 
 [dev-dependencies]
 wasmi = "0.31.1"
-wasm_runtime_layer = { version = "0.2.0", features = [ "backend_wasmi" ] }
+wasm_runtime_layer = { version = "0.3.0", features = [ "backend_wasmi" ] }
