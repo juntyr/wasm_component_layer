@@ -1,0 +1,24 @@
+[package]
+name = "wasm_component_layer_macro"
+version = "0.1.0"
+authors = ["The Wasmtime Project Developers"]
+description = "Macros for deriving component interface types from Rust types"
+license = "Apache-2.0 WITH LLVM-exception"
+repository = "https://github.com/DouglasDwyer/wasm_component_layer"
+edition = "2021"
+
+[lib]
+proc-macro = true
+test = false
+doctest = false
+
+[dependencies]
+anyhow = { version = "1.0", default-features = false }
+proc-macro2 = { version = "1.0", default-features = false }
+quote = { version = "1.0", default-features = false }
+syn = { version = "2.0", features = ["extra-traits"] }
+wasm_component_layer_wit_bindgen = { path = "../wit-bindgen" }
+wit-parser = { version = "0.200", default-features = false }
+
+[features]
+async = []

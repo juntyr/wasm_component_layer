@@ -82,6 +82,15 @@
 //! - More comprehensive tests
 //! - Subtyping
 
+#[cfg(feature = "macros")]
+pub use wasm_component_layer_macro::bindgen;
+
+#[cfg(feature = "macros")]
+#[doc(hidden)]
+pub mod __internal {
+    pub extern crate anyhow;
+}
+
 /// Implements the Canonical ABI conventions for converting between guest and host types.
 mod abi;
 

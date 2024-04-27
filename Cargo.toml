@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "wit-bindgen", "component-macro"]
+
 [package]
 name = "wasm_component_layer"
 version = "0.1.16"
@@ -18,13 +21,16 @@ ref-cast = { version = "1.0.20", default-features = false }
 semver = { version = "1.0.20", default-features = false }
 serde = { version = "1.0.193", optional = true, default-features = false, features = [ "derive", "rc" ] }
 slab = { version = "0.4.9", default-features = false }
+wasm_component_layer_macro = { path = "component-macro", optional = true }
 wasm_runtime_layer = { version = ">=0.2.0", default-features = false }
 wasmtime-environ = { version = ">=18.0.1, <20.0.0", features = [ "component-model" ] }
 wit-component = { version = ">=0.19.0, <=0.200.0", default-features = false }
 wit-parser = { version = ">=0.13.0, <=0.200.0", default-features = false }
 
 [features]
+default = [ "serde", "macros" ]
 serde = [ "dep:serde", "semver/serde" ]
+macros = [ "dep:wasm_component_layer_macro" ]
 
 [dev-dependencies]
 wasmi = "0.31.1"
