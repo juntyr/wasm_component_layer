@@ -7,11 +7,20 @@ interface foo {
         opt-c,
     }
 
+    enum my-enum {
+        case-a,
+        case-b,
+        case-c,
+    }
+
     // Selects the item in position n within list x
     select-nth: func(x: list<string>, n: u32) -> string;
 
     // Selects all flags which are not selected within f
     select-other-flags: func(f: my-flags) -> my-flags;
+
+    // Debug format the enum case into a string
+    debug-enum-case: func(e: my-enum) -> string;
 }
 
 world guest {

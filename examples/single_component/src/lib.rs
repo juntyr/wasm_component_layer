@@ -13,6 +13,10 @@ impl exports::test::guest::foo::Guest for Foo {
     }
 
     fn select_other_flags(f: exports::test::guest::foo::MyFlags) -> exports::test::guest::foo::MyFlags {
-        exports::test::guest::foo::MyFlags::OPT_A | exports::test::guest::foo::MyFlags::OPT_C
+        !f
+    }
+
+    fn debug_enum_case(e: exports::test::guest::foo::MyEnum) -> String {
+        format!("{e:?}")
     }
 }

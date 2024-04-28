@@ -1,55 +1,23 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{braced, Error, Result, Token};
+use syn::{braced, Result, Token};
 
 mod kw {
     syn::custom_keyword!(flags);
     syn::custom_keyword!(name);
 }
 
-fn find_rename(attributes: &[syn::Attribute]) -> Result<Option<syn::LitStr>> {
-    let mut name = None;
-
-    for attribute in attributes {
-        if !attribute.path().is_ident("component") {
-            continue;
-        }
-        let name_literal = attribute.parse_args_with(|parser: ParseStream<'_>| {
-            parser.parse::<kw::name>()?;
-            parser.parse::<Token![=]>()?;
-            parser.parse::<syn::LitStr>()
-        })?;
-
-        if name.is_some() {
-            return Err(Error::new_spanned(
-                attribute,
-                "duplicate field rename attribute",
-            ));
-        }
-
-        name = Some(name_literal);
-    }
-
-    Ok(name)
-}
-
 #[derive(Debug)]
 struct Flag {
-    rename: Option<String>,
     name: String,
 }
 
 impl Parse for Flag {
     fn parse(input: ParseStream) -> Result<Self> {
-        let attributes = syn::Attribute::parse_outer(input)?;
-
-        let rename = find_rename(&attributes)?.map(|literal| literal.value());
-
-        input.parse::<Token![const]>()?;
         let name = input.parse::<syn::Ident>()?.to_string();
 
-        Ok(Self { rename, name })
+        Ok(Self { name })
     }
 }
 
@@ -67,7 +35,7 @@ impl Parse for Flags {
         braced!(content in input);
 
         let flags = content
-            .parse_terminated(Flag::parse, Token![;])?
+            .parse_terminated(Flag::parse, Token![,])?
             .into_iter()
             .collect();
 
@@ -210,13 +178,9 @@ pub fn expand_flags(flags: &Flags) -> Result<TokenStream> {
 
     let mut constants = TokenStream::new();
     let mut rust_names = TokenStream::new();
-    let mut component_names = TokenStream::new();
 
-    for (index, Flag { name, rename }) in flags.flags.iter().enumerate() {
+    for (index, Flag { name }) in flags.flags.iter().enumerate() {
         rust_names.extend(quote!(#name,));
-
-        let component_name = rename.as_ref().unwrap_or(name);
-        component_names.extend(quote!(#component_name,));
 
         let fields = match size {
             FlagsSize::Size0 => quote!(),

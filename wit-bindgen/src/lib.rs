@@ -3,7 +3,7 @@ use crate::types::{TypeInfo, Types};
 use anyhow::{bail, Context};
 use heck::*;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::mem;
@@ -1040,7 +1040,7 @@ impl<'a> InterfaceGenerator<'a> {
             TypeDefKind::Record(record) => self.type_record(id, name, record, &ty.docs),
             TypeDefKind::Flags(flags) => self.type_flags(id, name, interface_name, flags, &ty.docs),
             TypeDefKind::Tuple(tuple) => self.type_tuple(id, name, tuple, &ty.docs),
-            TypeDefKind::Enum(enum_) => self.type_enum(id, name, enum_, &ty.docs),
+            TypeDefKind::Enum(enum_) => self.type_enum(id, name, interface_name, enum_, &ty.docs),
             TypeDefKind::Variant(variant) => self.type_variant(id, name, variant, &ty.docs),
             TypeDefKind::Option(t) => self.type_option(id, name, t, &ty.docs),
             TypeDefKind::Result(r) => self.type_result(id, name, r, &ty.docs),
@@ -1168,9 +1168,8 @@ impl<'a> InterfaceGenerator<'a> {
         for flag in flags.flags.iter() {
             uwrite!(
                 self.src,
-                "#[component(name=\"{}\")] const {};\n",
-                flag.name,
-                flag.name.to_shouty_snake_case()
+                "{},\n",
+                flag.name.to_upper_camel_case()
             );
         }
         self.src.push_str("}\n");
@@ -1179,8 +1178,8 @@ impl<'a> InterfaceGenerator<'a> {
         self.src.push_str(&rust_name);
         self.src.push_str("{\n");
         self.src.push_str("fn get_flags_ty() -> &'static wasm_component_layer::FlagsType {\n");
-        self.src.push_str("static VALUE_TY: std::sync::OnceLock<wasm_component_layer::FlagsType> = std::sync::OnceLock::new();\n");
-        self.src.push_str("VALUE_TY.get_or_init(|| {\n");
+        self.src.push_str("static FLAGS_TY: std::sync::OnceLock<wasm_component_layer::FlagsType> = std::sync::OnceLock::new();\n");
+        self.src.push_str("FLAGS_TY.get_or_init(|| {\n");
         self.src.push_str("wasm_component_layer::FlagsType::new(\n");
         self.src.push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
         uwrite!(
@@ -1219,7 +1218,7 @@ impl<'a> InterfaceGenerator<'a> {
                 self.src,
                 "if flags.get(\"{}\") {{\nthis |= Self::{};\n}}\n",
                 flag.name,
-                flag.name.to_shouty_snake_case()
+                flag.name.to_upper_camel_case()
             );
         }
         self.src.push_str("Ok(this)\n");
@@ -1230,8 +1229,8 @@ impl<'a> InterfaceGenerator<'a> {
             uwrite!(
                 self.src,
                 "if (self & Self::{}) == Self::{} {{\nflags.set(\"{}\", true);\n}}\n",
-                flag.name.to_shouty_snake_case(),
-                flag.name.to_shouty_snake_case(),
+                flag.name.to_upper_camel_case(),
+                flag.name.to_upper_camel_case(),
                 flag.name
             );
         }
@@ -1274,8 +1273,184 @@ impl<'a> InterfaceGenerator<'a> {
         }
     }
 
-    fn type_enum(&mut self, _id: TypeId, _name: &str, _enum_: &Enum, _docs: &Docs) {
-        unimplemented!("enum type bindgen is unimplemeted");
+    fn type_enum(&mut self, id: TypeId, name: &str, interface_name: &str, enum_: &Enum, docs: &Docs) {
+        let info = self.info(id);
+
+        // We use a BTree set to make sure we don't have any duplicates and have a stable order
+        let mut derives: BTreeSet<String> = self
+            .gen
+            .opts
+            .additional_derive_attributes
+            .iter()
+            .cloned()
+            .collect();
+
+        derives.extend(
+            ["Clone", "Copy", "PartialEq", "Eq"]
+                .into_iter()
+                .map(|s| s.to_string()),
+        );
+
+        let rust_name = to_rust_upper_camel_case(name);
+        self.rustdoc(docs);
+        self.push_str("#[derive(");
+        self.push_str(&derives.into_iter().collect::<Vec<_>>().join(", "));
+        self.push_str(")]\n");
+
+        self.push_str(&format!("pub enum {} {{\n", rust_name));
+        for case in enum_.cases.iter() {
+            self.rustdoc(&case.docs);
+            self.push_str(&case.name.to_upper_camel_case());
+            self.push_str(",\n");
+        }
+        self.push_str("}\n");
+
+        self.src.push_str("impl ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        self.src.push_str("fn get_enum_ty() -> &'static wasm_component_layer::EnumType {\n");
+        self.src.push_str("static ENUM_TY: std::sync::OnceLock<wasm_component_layer::EnumType> = std::sync::OnceLock::new();\n");
+        self.src.push_str("ENUM_TY.get_or_init(|| {\n");
+        self.src.push_str("wasm_component_layer::EnumType::new(\n");
+        self.src.push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
+        uwrite!(
+            self.src,
+            "\"{name}\", Some(\"{interface_name}\".try_into().unwrap())\n",
+        );
+        self.src.push_str(")),\n");
+        self.src.push_str("[");
+        for case in enum_.cases.iter() {
+            uwrite!(
+                self.src,
+                "\"{}\",",
+                case.name
+            );
+        }
+        self.src.push_str("],\n");
+        self.src.push_str(").unwrap()\n");
+        self.src.push_str("})\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str("impl wasm_component_layer::ComponentType for ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        self.src.push_str("fn ty() -> wasm_component_layer::ValueType {\n");
+        self.src.push_str("wasm_component_layer::ValueType::Enum(Self::get_enum_ty().clone())\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str("fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n");
+        self.src.push_str("let enum_ = match value {\n");
+        self.src.push_str("wasm_component_layer::Value::Enum(enum_) => enum_,\n");
+        self.src.push_str("_ => anyhow::bail!(\"incorrect type, expected enum\"),\n");
+        self.src.push_str("};\n");
+        self.src.push_str("anyhow::ensure!(&enum_.ty() == Self::get_enum_ty(), \"incorrect enum type\");\n");
+        self.src.push_str("let this = match enum_.discriminant() {\n");
+        for (i, case) in enum_.cases.iter().enumerate() {
+            uwrite!(
+                self.src,
+                "{i} => Self::{},\n",
+                case.name.to_upper_camel_case(),
+            );
+        }
+        self.src.push_str("_ => anyhow::bail!(\"unexpected enum discriminant\"),\n");
+        self.src.push_str("};\n");
+        self.src.push_str("Ok(this)\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
+        self.src.push_str("let discriminant = match self {\n");
+        for (i, case) in enum_.cases.iter().enumerate() {
+            uwrite!(
+                self.src,
+                "Self::{} => {i},\n",
+                case.name.to_upper_camel_case(),
+            );
+        }
+        self.src.push_str("};\n");
+        self.src.push_str("let enum_ = wasm_component_layer::Enum::new(Self::get_enum_ty().clone(), discriminant)?;\n");
+        self.src.push_str("Ok(wasm_component_layer::Value::Enum(enum_))\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
+
+        // Auto-synthesize an implementation of the standard `Error` trait for
+        // error-looking types based on their name.
+        if info.error {
+            self.push_str("impl ");
+            self.push_str(&rust_name);
+            self.push_str("{\n");
+
+            self.push_str("pub fn name(&self) -> &'static str {\n");
+            self.push_str("match self {\n");
+            for case in enum_.cases.iter() {
+                self.push_str("Self::");
+                self.push_str(&case.name.to_upper_camel_case());
+                self.push_str(" => \"");
+                self.push_str(case.name.as_str());
+                self.push_str("\",\n");
+            }
+            self.push_str("}\n");
+            self.push_str("}\n");
+
+            self.push_str("pub fn message(&self) -> &'static str {\n");
+            self.push_str("match self {\n");
+            for case in enum_.cases.iter() {
+                self.push_str("Self::");
+                self.push_str(&case.name.to_upper_camel_case());
+                self.push_str(" => \"");
+                if let Some(contents) = &case.docs.contents {
+                    self.push_str(contents.trim());
+                }
+                self.push_str("\",\n");
+            }
+            self.push_str("}\n");
+            self.push_str("}\n");
+
+            self.push_str("}\n");
+
+            self.push_str("impl core::fmt::Debug for ");
+            self.push_str(&rust_name);
+            self.push_str(
+                "{\nfn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {\n",
+            );
+            self.push_str("fmt.debug_struct(\"");
+            self.push_str(name);
+            self.push_str("\")\n");
+            self.push_str(".field(\"code\", &(*self as i32))\n");
+            self.push_str(".field(\"name\", &self.name())\n");
+            self.push_str(".field(\"message\", &self.message())\n");
+            self.push_str(".finish()\n");
+            self.push_str("}\n");
+            self.push_str("}\n");
+
+            self.push_str("impl core::fmt::Display for ");
+            self.push_str(&rust_name);
+            self.push_str(
+                "{\nfn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {\n",
+            );
+            self.push_str("write!(fmt, \"{} (error {})\", self.name(), *self as i32)");
+            self.push_str("}\n");
+            self.push_str("}\n");
+            self.push_str("\n");
+            self.push_str("impl std::error::Error for ");
+            self.push_str(&rust_name);
+            self.push_str("{}\n\n");
+        } else {
+            self.push_str("impl core::fmt::Debug for ");
+            self.push_str(&rust_name);
+            self.push_str(
+                "{\nfn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {\n",
+            );
+            self.push_str("match self {\n");
+            for case in enum_.cases.iter() {
+                self.push_str("Self::");
+                self.push_str(&case.name.to_upper_camel_case());
+                self.push_str(" => {\n");
+                self.push_str(&format!("fmt.debug_tuple(\"{}::{}\")", rust_name, case.name.to_upper_camel_case()));
+                self.push_str(".finish()\n");
+                self.push_str("},\n");
+            }
+            self.push_str("}\n");
+            self.push_str("}\n");
+            self.push_str("}\n\n");
+        }
     }
 
     fn type_alias(&mut self, id: TypeId, _name: &str, ty: &Type, docs: &Docs) {
