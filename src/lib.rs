@@ -89,6 +89,26 @@ pub use wasm_component_layer_macro::bindgen;
 #[doc(hidden)]
 pub mod __internal {
     pub extern crate anyhow;
+
+    pub use wasm_component_layer_macro::flags;
+
+    /// Format the specified bitflags using the specified names for debugging
+    pub fn format_flags(bits: &[u32], names: &[&str], f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("(")?;
+        let mut wrote = false;
+        for (index, name) in names.iter().enumerate() {
+            if ((bits[index / 32] >> (index % 32)) & 1) != 0 {
+                if wrote {
+                    f.write_str("|")?;
+                } else {
+                    wrote = true;
+                }
+
+                f.write_str(name)?;
+            }
+        }
+        f.write_str(")")
+    }
 }
 
 /// Implements the Canonical ABI conventions for converting between guest and host types.

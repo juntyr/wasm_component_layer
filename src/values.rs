@@ -670,11 +670,11 @@ impl Flags {
     pub fn get_index(&self, index: usize) -> bool {
         let index = index as u32;
         match &self.flags {
-            FlagsList::Single(x) => (*x >> index) == 1,
+            FlagsList::Single(x) => ((*x >> index) & 1) == 1,
             FlagsList::Multiple(x) => {
                 let arr_index = index / u32::BITS;
                 let sub_index = index % u32::BITS;
-                (x[arr_index as usize] >> sub_index) == 1
+                ((x[arr_index as usize] >> sub_index) & 1) == 1
             }
         }
     }

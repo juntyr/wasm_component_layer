@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use syn::parse::{Error, Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
 use syn::{braced, token, Token};
-use wasm_component_layer_wit_bindgen::{Opts, Ownership, TrappableError, TrappableImports};
+use wasm_component_layer_wit_bindgen::{Opts, TrappableError, TrappableImports};
 use wit_parser::{PackageId, Resolve, UnresolvedPackage, WorldId};
 
 pub struct Config {
@@ -95,7 +95,6 @@ impl Parse for Config {
                     Opt::Tracing(val) => opts.tracing = val,
                     Opt::TrappableErrorType(val) => opts.trappable_error_type = val,
                     Opt::TrappableImports(val) => opts.trappable_imports = val,
-                    Opt::Ownership(val) => opts.ownership = val,
                     Opt::Interfaces(s) => {
                         if inline.is_some() {
                             return Err(Error::new(s.span(), "cannot specify a second source"));
@@ -205,7 +204,6 @@ enum Opt {
     Inline(syn::LitStr),
     Tracing(bool),
     TrappableErrorType(Vec<TrappableError>),
-    Ownership(Ownership),
     Interfaces(syn::LitStr),
     With(HashMap<String, String>),
     TrappableImports(TrappableImports),
@@ -231,44 +229,6 @@ impl Parse for Opt {
             input.parse::<kw::tracing>()?;
             input.parse::<Token![:]>()?;
             Ok(Opt::Tracing(input.parse::<syn::LitBool>()?.value))
-        } else if l.peek(kw::ownership) {
-            input.parse::<kw::ownership>()?;
-            input.parse::<Token![:]>()?;
-            let ownership = input.parse::<syn::Ident>()?;
-            Ok(Opt::Ownership(match ownership.to_string().as_str() {
-                "Owning" => Ownership::Owning,
-                "Borrowing" => Ownership::Borrowing {
-                    duplicate_if_necessary: {
-                        let contents;
-                        braced!(contents in input);
-                        let field = contents.parse::<syn::Ident>()?;
-                        match field.to_string().as_str() {
-                            "duplicate_if_necessary" => {
-                                contents.parse::<Token![:]>()?;
-                                contents.parse::<syn::LitBool>()?.value
-                            }
-                            name => {
-                                return Err(Error::new(
-                                    field.span(),
-                                    format!(
-                                        "unrecognized `Ownership::Borrowing` field: `{name}`; \
-                                         expected `duplicate_if_necessary`"
-                                    ),
-                                ));
-                            }
-                        }
-                    },
-                },
-                name => {
-                    return Err(Error::new(
-                        ownership.span(),
-                        format!(
-                            "unrecognized ownership: `{name}`; \
-                             expected `Owning` or `Borrowing`"
-                        ),
-                    ));
-                }
-            }))
         } else if l.peek(kw::trappable_error_type) {
             input.parse::<kw::trappable_error_type>()?;
             input.parse::<Token![:]>()?;

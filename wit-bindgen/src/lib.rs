@@ -98,9 +98,6 @@ pub struct Opts {
     /// `result<T, E>` found in WIT.
     pub trappable_error_type: Vec<TrappableError>,
 
-    /// Whether to generate owning or borrowing type definitions.
-    pub ownership: Ownership,
-
     /// Whether or not to generate code for only the interfaces of this wit file or not.
     pub only_interfaces: bool,
 
@@ -331,11 +328,12 @@ impl Bindgen {
                     .push((module, self.interface_names[id].clone()));
             }
             WorldItem::Type(ty) => {
+                let interface_name = resolve.name_world_key(name);
                 let name = match name {
                     WorldKey::Name(name) => name,
                     WorldKey::Interface(_) => unreachable!(),
                 };
-                gen.define_type(name, *ty);
+                gen.define_type(name, &interface_name, *ty);
                 let body = mem::take(&mut gen.src);
                 self.src.push_str(&body);
             }
@@ -373,9 +371,19 @@ impl Bindgen {
                 for (_, func) in iface.functions.iter() {
                     uwriteln!(
                         gen.src,
-                        "{}: wasm_component_layer::Func,",
+                        "{}: wasm_component_layer::TypedFunc<(",
                         func_field_name(resolve, func)
                     );
+                    for (_, ty) in func.params.iter() {
+                        gen.print_ty(ty, TypeMode::Owned);
+                        gen.push_str(", ");
+                    }
+                    gen.src.push_str("), (");
+                    for ty in func.results.iter_types() {
+                        gen.print_ty(ty, TypeMode::Owned);
+                        gen.push_str(", ");
+                    }
+                    gen.src.push_str(")>,");
                 }
                 uwriteln!(gen.src, "}}");
 
@@ -551,7 +559,7 @@ impl Bindgen {
                     mut store: impl wasm_component_layer::AsContextMut,
                     instance: &wasm_component_layer::Instance,
                 ) -> anyhow::Result<Self> {{
-                    let mut store = store.as_context_mut();
+                    let mut _store = store.as_context_mut();
                     let __exports = instance.exports();
             ",
         );
@@ -1020,16 +1028,17 @@ impl<'a> InterfaceGenerator<'a> {
     }
 
     fn types(&mut self, id: InterfaceId) {
+        let interface_name = self.resolve.id_of(id).expect("unexpected anonymous interface");
         for (name, id) in self.resolve.interfaces[id].types.iter() {
-            self.define_type(name, *id);
+            self.define_type(name, &interface_name, *id);
         }
     }
 
-    fn define_type(&mut self, name: &str, id: TypeId) {
+    fn define_type(&mut self, name: &str, interface_name: &str, id: TypeId) {
         let ty = &self.resolve.types[id];
         match &ty.kind {
             TypeDefKind::Record(record) => self.type_record(id, name, record, &ty.docs),
-            TypeDefKind::Flags(flags) => self.type_flags(id, name, flags, &ty.docs),
+            TypeDefKind::Flags(flags) => self.type_flags(id, name, interface_name, flags, &ty.docs),
             TypeDefKind::Tuple(tuple) => self.type_tuple(id, name, tuple, &ty.docs),
             TypeDefKind::Enum(enum_) => self.type_enum(id, name, enum_, &ty.docs),
             TypeDefKind::Variant(variant) => self.type_variant(id, name, variant, &ty.docs),
@@ -1151,8 +1160,84 @@ impl<'a> InterfaceGenerator<'a> {
         }
     }
 
-    fn type_flags(&mut self, _id: TypeId, _name: &str, _flags: &Flags, _docs: &Docs) {
-        unimplemented!("flag type bindgen is unimplemeted");
+    fn type_flags(&mut self, _id: TypeId, name: &str, interface_name: &str, flags: &Flags, docs: &Docs) {
+        self.rustdoc(docs);
+        let rust_name = to_rust_upper_camel_case(name);
+        self.src.push_str("wasm_component_layer::__internal::flags!(\n");
+        self.src.push_str(&format!("{rust_name} {{\n"));
+        for flag in flags.flags.iter() {
+            uwrite!(
+                self.src,
+                "#[component(name=\"{}\")] const {};\n",
+                flag.name,
+                flag.name.to_shouty_snake_case()
+            );
+        }
+        self.src.push_str("}\n");
+        self.src.push_str(");\n\n");
+        self.src.push_str("impl ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        self.src.push_str("fn get_flags_ty() -> &'static wasm_component_layer::FlagsType {\n");
+        self.src.push_str("static VALUE_TY: std::sync::OnceLock<wasm_component_layer::FlagsType> = std::sync::OnceLock::new();\n");
+        self.src.push_str("VALUE_TY.get_or_init(|| {\n");
+        self.src.push_str("wasm_component_layer::FlagsType::new(\n");
+        self.src.push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
+        uwrite!(
+            self.src,
+            "\"{name}\", Some(\"{interface_name}\".try_into().unwrap())\n",
+        );
+        self.src.push_str(")),\n");
+        self.src.push_str("[");
+        for flag in flags.flags.iter() {
+            uwrite!(
+                self.src,
+                "\"{}\",",
+                flag.name
+            );
+        }
+        self.src.push_str("],\n");
+        self.src.push_str(").unwrap()\n");
+        self.src.push_str("})\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str("impl wasm_component_layer::ComponentType for ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        self.src.push_str("fn ty() -> wasm_component_layer::ValueType {\n");
+        self.src.push_str("wasm_component_layer::ValueType::Flags(Self::get_flags_ty().clone())\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str("fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n");
+        self.src.push_str("let flags = match value {\n");
+        self.src.push_str("wasm_component_layer::Value::Flags(flags) => flags,\n");
+        self.src.push_str("_ => anyhow::bail!(\"incorrect type, expected flags\"),\n");
+        self.src.push_str("};\n");
+        self.src.push_str("anyhow::ensure!(&flags.ty() == Self::get_flags_ty(), \"incorrect flags type\");\n");
+        self.src.push_str("let mut this = Self::default();\n");
+        for flag in flags.flags.iter() {
+            uwrite!(
+                self.src,
+                "if flags.get(\"{}\") {{\nthis |= Self::{};\n}}\n",
+                flag.name,
+                flag.name.to_shouty_snake_case()
+            );
+        }
+        self.src.push_str("Ok(this)\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
+        self.src.push_str("let mut flags = wasm_component_layer::Flags::new(Self::get_flags_ty().clone());\n");
+        for flag in flags.flags.iter() {
+            uwrite!(
+                self.src,
+                "if (self & Self::{}) == Self::{} {{\nflags.set(\"{}\", true);\n}}\n",
+                flag.name.to_shouty_snake_case(),
+                flag.name.to_shouty_snake_case(),
+                flag.name
+            );
+        }
+        self.src.push_str("Ok(wasm_component_layer::Value::Flags(flags))\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
     }
 
     fn type_variant(&mut self, _id: TypeId, _name: &str, _variant: &Variant, _docs: &Docs) {
@@ -1564,7 +1649,7 @@ impl<'a> InterfaceGenerator<'a> {
         self.src.push_str(&func.name);
         self.src.push_str("\").ok_or_else(|| anyhow::anyhow!(\"exported function `");
         self.src.push_str(&func.name);
-        self.src.push_str("` not present\"))?");
+        self.src.push_str("` not present\"))?.typed()?");
 
         // uwrite!(self.src, "*__exports.typed_func::<(");
         // for (_, ty) in func.params.iter() {
@@ -1633,28 +1718,14 @@ impl<'a> InterfaceGenerator<'a> {
             FunctionKind::Freestanding => "",
             _ => ".funcs",
         };
-        uwriteln!(
-            self.src,
-            "let callee = self{projection_to_func}.{}.typed::<(",
-            func_field_name(self.resolve, func),
-        );
-        for (_, ty) in func.params.iter() {
-            self.print_ty(ty, TypeMode::Owned);
-            self.push_str(", ");
-        }
-        self.src.push_str("), (");
-        for ty in func.results.iter_types() {
-            self.print_ty(ty, TypeMode::Owned);
-            self.push_str(", ");
-        }
-        self.src.push_str(")>()?;\n");
         self.src.push_str("let (");
         for (i, _) in func.results.iter_types().enumerate() {
             uwrite!(self.src, "ret{},", i);
         }
-        uwrite!(
+        uwriteln!(
             self.src,
-            ") = callee.call(store.as_context_mut(), ("
+            ") = self{projection_to_func}.{}.call(store.as_context_mut(), (",
+            func_field_name(self.resolve, func),
         );
         for (i, _) in func.params.iter().enumerate() {
             uwrite!(self.src, "arg{}, ", i);
@@ -1714,7 +1785,7 @@ impl<'a> RustGenerator<'a> for InterfaceGenerator<'a> {
     }
 
     fn ownership(&self) -> Ownership {
-        self.gen.opts.ownership
+        Ownership::Owning
     }
 
     fn path_to_interface(&self, interface: InterfaceId) -> Option<String> {

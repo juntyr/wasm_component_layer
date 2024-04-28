@@ -1,8 +1,17 @@
 package test:guest;
 
 interface foo {
+    flags my-flags {
+        opt-a,
+        opt-b,
+        opt-c,
+    }
+
     // Selects the item in position n within list x
     select-nth: func(x: list<string>, n: u32) -> string;
+
+    // Selects all flags which are not selected within f
+    select-other-flags: func(f: my-flags) -> my-flags;
 }
 
 world guest {

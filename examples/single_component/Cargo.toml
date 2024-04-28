@@ -1,5 +1,7 @@
 cargo-features = ["per-package-target"]
 
+[workspace]
+
 [package]
 name = "single_component"
 version = "0.1.0"

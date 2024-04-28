@@ -35,4 +35,11 @@ pub fn main() {
         interface.call_select_nth(&mut store, example.clone(), 1).unwrap()
     );
     // Prints 'Calling select-nth(["a", "b", "c"], 1) == b'
+
+    let flags = exports::test::guest::foo::MyFlags::OPT_B;
+    println!(
+        "Calling select-other-flags({flags:?}) == {:?}",
+        interface.call_select_other_flags(&mut store, flags).unwrap()
+    );
+    // Prints 'Calling select-other-flags((OPT_B)) == (OPT_A|OPT_C)'
 }
