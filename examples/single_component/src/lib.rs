@@ -23,4 +23,16 @@ impl exports::test::guest::foo::Guest for Foo {
     fn pack_bytes_into_variant(b: Vec<u8>) -> exports::test::guest::foo::MyVariant {
         exports::test::guest::foo::MyVariant::List(b)
     }
+
+    fn flip_record_fields(r: exports::test::guest::foo::MyRecord) -> exports::test::guest::foo::MyRecord {
+        exports::test::guest::foo::MyRecord {
+            a: !r.a,
+            b: !r.b,
+            c: match r.c {
+                exports::test::guest::foo::MyEnum::CaseA => exports::test::guest::foo::MyEnum::CaseB,
+                exports::test::guest::foo::MyEnum::CaseB => exports::test::guest::foo::MyEnum::CaseC,
+                exports::test::guest::foo::MyEnum::CaseC => exports::test::guest::foo::MyEnum::CaseA,
+            },
+        }
+    }
 }

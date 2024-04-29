@@ -1038,7 +1038,9 @@ impl<'a> InterfaceGenerator<'a> {
     fn define_type(&mut self, name: &str, interface_name: &str, id: TypeId) {
         let ty = &self.resolve.types[id];
         match &ty.kind {
-            TypeDefKind::Record(record) => self.type_record(id, name, record, &ty.docs),
+            TypeDefKind::Record(record) => {
+                self.type_record(id, name, interface_name, record, &ty.docs)
+            }
             TypeDefKind::Flags(flags) => self.type_flags(id, name, interface_name, flags, &ty.docs),
             TypeDefKind::Tuple(tuple) => self.type_tuple(id, name, tuple, &ty.docs),
             TypeDefKind::Enum(enum_) => self.type_enum(id, name, interface_name, enum_, &ty.docs),
@@ -1143,8 +1145,183 @@ impl<'a> InterfaceGenerator<'a> {
         }
     }
 
-    fn type_record(&mut self, _id: TypeId, _name: &str, _record: &Record, _docs: &Docs) {
-        unimplemented!("record type bindgen is unimplemeted");
+    fn type_record(
+        &mut self,
+        id: TypeId,
+        name: &str,
+        interface_name: &str,
+        record: &Record,
+        docs: &Docs,
+    ) {
+        let info = self.info(id);
+
+        // We use a BTree set to make sure we don't have any duplicates and we have a stable order
+        let mut additional_derives: BTreeSet<String> = self
+            .gen
+            .opts
+            .additional_derive_attributes
+            .iter()
+            .cloned()
+            .collect();
+
+        self.rustdoc(docs);
+
+        if info.is_copy() {
+            additional_derives.extend(["Copy", "Clone"].into_iter().map(|s| s.to_string()));
+        } else if info.is_clone() {
+            additional_derives.insert("Clone".to_string());
+        }
+
+        if !additional_derives.is_empty() {
+            self.push_str("#[derive(");
+            self.push_str(
+                &additional_derives
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            self.push_str(")]\n")
+        }
+
+        let rust_name = to_rust_upper_camel_case(name);
+        self.push_str("pub struct ");
+        self.push_str(&rust_name);
+        self.push_str(" {\n");
+        for field in record.fields.iter() {
+            self.rustdoc(&field.docs);
+            self.push_str("pub ");
+            self.push_str(&to_rust_ident(&field.name));
+            self.push_str(": ");
+            self.print_ty(&field.ty, TypeMode::Owned);
+            self.push_str(",\n");
+        }
+        self.push_str("}\n");
+
+        self.src.push_str("impl ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        for field in record.fields.iter() {
+            self.src.push_str("fn get_");
+            self.src.push_str(&field.name.to_snake_case());
+            self.src
+                .push_str("_field_name() -> &'static std::sync::Arc<str> {\n");
+            self.src.push_str("static FIELD_NAME: std::sync::OnceLock<std::sync::Arc<str>> = std::sync::OnceLock::new();\n");
+            self.src
+                .push_str("FIELD_NAME.get_or_init(|| std::sync::Arc::from(\"");
+            self.src.push_str(&field.name);
+            self.src.push_str("\"))\n");
+            self.src.push_str("}\n\n");
+        }
+        self.src
+            .push_str("fn get_record_ty() -> &'static wasm_component_layer::RecordType {\n");
+        self.src.push_str("static RECORD_TY: std::sync::OnceLock<wasm_component_layer::RecordType> = std::sync::OnceLock::new();\n");
+        self.src.push_str("RECORD_TY.get_or_init(|| {\n");
+        self.src
+            .push_str("wasm_component_layer::RecordType::new(\n");
+        self.src
+            .push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
+        uwrite!(
+            self.src,
+            "\"{name}\", Some(\"{interface_name}\".try_into().unwrap())\n",
+        );
+        self.src.push_str(")),\n");
+        self.src.push_str("[");
+        for field in record.fields.iter() {
+            self.src.push_str("(std::sync::Arc::clone(Self::get_");
+            self.src.push_str(&field.name.to_snake_case());
+            self.src.push_str("_field_name()), <");
+            self.print_ty(&field.ty, TypeMode::Owned);
+            self.src
+                .push_str(" as wasm_component_layer::ComponentType>::ty()),\n");
+        }
+        self.src.push_str("],\n");
+        self.src.push_str(").unwrap()\n");
+        self.src.push_str("})\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
+        self.src
+            .push_str("impl wasm_component_layer::ComponentType for ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        self.src
+            .push_str("fn ty() -> wasm_component_layer::ValueType {\n");
+        self.src
+            .push_str("wasm_component_layer::ValueType::Record(Self::get_record_ty().clone())\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str(
+            "fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n",
+        );
+        self.src.push_str("let record = match value {\n");
+        self.src
+            .push_str("wasm_component_layer::Value::Record(record) => record,\n");
+        self.src
+            .push_str("_ => anyhow::bail!(\"incorrect type, expected record\"),\n");
+        self.src.push_str("};\n");
+        self.src.push_str(
+            "anyhow::ensure!(&record.ty() == Self::get_record_ty(), \"incorrect record type\");\n",
+        );
+        self.src.push_str("Ok(Self {\n");
+        for field in record.fields.iter() {
+            self.src.push_str(&to_rust_ident(&field.name));
+            self.src.push_str(": <");
+            self.print_ty(&field.ty, TypeMode::Owned);
+            self.src
+                .push_str(" as wasm_component_layer::ComponentType>::from_value(&record.field(\"");
+            self.src.push_str(&field.name);
+            self.src
+                .push_str("\").ok_or_else(|| anyhow::anyhow!(\"record missing field\"))?)?,");
+        }
+        self.src.push_str("})\n");
+        self.src.push_str("}\n\n");
+        self.src
+            .push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
+        self.src.push_str(
+            "let record = wasm_component_layer::Record::new(Self::get_record_ty().clone(), [\n",
+        );
+        for field in record.fields.iter() {
+            self.src.push_str("(std::sync::Arc::clone(Self::get_");
+            self.src.push_str(&field.name.to_snake_case());
+            self.src.push_str("_field_name()), <");
+            self.print_ty(&field.ty, TypeMode::Owned);
+            self.src
+                .push_str(" as wasm_component_layer::ComponentType>::into_value(self.");
+            self.src.push_str(&to_rust_ident(&field.name));
+            self.src.push_str(")?),\n");
+        }
+        self.src.push_str("])?;\n");
+        self.src
+            .push_str("Ok(wasm_component_layer::Value::Record(record))\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
+
+        self.push_str("impl core::fmt::Debug for ");
+        self.push_str(&rust_name);
+        self.push_str(" {\n");
+        self.push_str("fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {\n");
+        self.push_str(&format!("fmt.debug_struct(\"{}\")", rust_name));
+        for field in record.fields.iter() {
+            self.push_str(&format!(
+                ".field(\"{}\", &self.{})",
+                to_rust_ident(&field.name),
+                to_rust_ident(&field.name)
+            ));
+        }
+        self.push_str(".finish()\n");
+        self.push_str("}\n");
+        self.push_str("}\n\n");
+
+        if info.error {
+            self.push_str("impl core::fmt::Display for ");
+            self.push_str(&rust_name);
+            self.push_str(" {\n");
+            self.push_str("fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {\n");
+            self.push_str("write!(f, \"{:?}\", self)\n");
+            self.push_str("}\n");
+            self.push_str("}\n\n");
+            self.push_str("impl std::error::Error for ");
+            self.push_str(&rust_name);
+            self.push_str("{}\n\n");
+        }
     }
 
     fn type_tuple(&mut self, id: TypeId, _name: &str, tuple: &Tuple, docs: &Docs) {
@@ -2275,10 +2452,7 @@ fn get_resources(resolve: &Resolve, id: InterfaceId) -> impl Iterator<Item = &'_
         })
 }
 
-fn get_world_resources(
-    resolve: &Resolve,
-    id: WorldId,
-) -> impl Iterator<Item = &'_ str> + '_ {
+fn get_world_resources(resolve: &Resolve, id: WorldId) -> impl Iterator<Item = &'_ str> + '_ {
     resolve.worlds[id]
         .imports
         .iter()

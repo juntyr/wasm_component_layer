@@ -62,4 +62,17 @@ pub fn main() {
             .unwrap()
     );
     // Prints 'Calling pack-bytes-into-variant([1, 2, 3]) == MyVariant::List([1, 2, 3])'
+
+    let record = exports::test::guest::foo::MyRecord {
+        a: true,
+        b: exports::test::guest::foo::MyFlags::OptC,
+        c: exports::test::guest::foo::MyEnum::CaseA,
+    };
+    println!(
+        "Calling flip-record-fields({record:?}) == {:?}",
+        interface
+            .call_flip_record_fields(&mut store, record)
+            .unwrap()
+    );
+    // Prints 'Calling flip-record-fields(MyRecord { a: true, b: (OptC), c: MyEnum::CaseA }) == MyRecord { a: false, b: (OptA|OptB), c: MyEnum::CaseB }'
 }

@@ -20,6 +20,13 @@ interface foo {
         %string(string),
         %flags(my-flags),
         %enum(my-enum),
+        %record(my-record),
+    }
+
+    record my-record {
+        a: bool,
+        b: my-flags,
+        c: my-enum,
     }
 
     // Selects the item in position n within list x
@@ -33,6 +40,9 @@ interface foo {
 
     // Pack a byte string into my-variant
     pack-bytes-into-variant: func(l: list<u8>) -> my-variant;
+
+    // Flip the fields of the record r
+    flip-record-fields: func(r: my-record) -> my-record;
 }
 
 world guest {
