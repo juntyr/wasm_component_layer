@@ -19,4 +19,8 @@ impl exports::test::guest::foo::Guest for Foo {
     fn debug_enum_case(e: exports::test::guest::foo::MyEnum) -> String {
         format!("{e:?}")
     }
+
+    fn pack_bytes_into_variant(b: Vec<u8>) -> exports::test::guest::foo::MyVariant {
+        exports::test::guest::foo::MyVariant::List(b)
+    }
 }

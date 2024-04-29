@@ -13,6 +13,15 @@ interface foo {
         case-c,
     }
 
+    variant my-variant {
+        unit,
+        %option(option<u32>),
+        %list(list<u8>),
+        %string(string),
+        %flags(my-flags),
+        %enum(my-enum),
+    }
+
     // Selects the item in position n within list x
     select-nth: func(x: list<string>, n: u32) -> string;
 
@@ -21,6 +30,9 @@ interface foo {
 
     // Debug format the enum case into a string
     debug-enum-case: func(e: my-enum) -> string;
+
+    // Pack a byte string into my-variant
+    pack-bytes-into-variant: func(l: list<u8>) -> my-variant;
 }
 
 world guest {

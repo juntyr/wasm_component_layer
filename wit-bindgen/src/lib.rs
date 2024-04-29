@@ -230,9 +230,7 @@ impl Bindgen {
         // a simpler path is chosen to generate "foo0_1_0" and "foo0_2_0".
         let version = version
             .to_string()
-            .replace('.', "_")
-            .replace('-', "_")
-            .replace('+', "_")
+            .replace(['.', '-', '+'], "_")
             .to_snake_case();
         format!("{base}{version}")
     }
@@ -738,7 +736,7 @@ impl Bindgen {
             fn lookup_key(&self, resolve: &Resolve) -> String {
                 let mut s = self.prefix.lookup_key(resolve);
                 if let Some(item) = self.item {
-                    s.push_str("/");
+                    s.push('/');
                     s.push_str(item);
                 }
                 s
@@ -957,7 +955,7 @@ fn resolve_type_in_package(resolve: &Resolve, wit_path: &str) -> anyhow::Result<
                 }
             },
         )
-        .flat_map(|l| l)
+        .flatten()
         .collect::<HashSet<_>>();
 
     let mut found_interface = false;
@@ -1028,7 +1026,10 @@ impl<'a> InterfaceGenerator<'a> {
     }
 
     fn types(&mut self, id: InterfaceId) {
-        let interface_name = self.resolve.id_of(id).expect("unexpected anonymous interface");
+        let interface_name = self
+            .resolve
+            .id_of(id)
+            .expect("unexpected anonymous interface");
         for (name, id) in self.resolve.interfaces[id].types.iter() {
             self.define_type(name, &interface_name, *id);
         }
@@ -1041,7 +1042,9 @@ impl<'a> InterfaceGenerator<'a> {
             TypeDefKind::Flags(flags) => self.type_flags(id, name, interface_name, flags, &ty.docs),
             TypeDefKind::Tuple(tuple) => self.type_tuple(id, name, tuple, &ty.docs),
             TypeDefKind::Enum(enum_) => self.type_enum(id, name, interface_name, enum_, &ty.docs),
-            TypeDefKind::Variant(variant) => self.type_variant(id, name, variant, &ty.docs),
+            TypeDefKind::Variant(variant) => {
+                self.type_variant(id, name, interface_name, variant, &ty.docs)
+            }
             TypeDefKind::Option(t) => self.type_option(id, name, t, &ty.docs),
             TypeDefKind::Result(r) => self.type_result(id, name, r, &ty.docs),
             TypeDefKind::List(t) => self.type_list(id, name, t, &ty.docs),
@@ -1160,28 +1163,34 @@ impl<'a> InterfaceGenerator<'a> {
         }
     }
 
-    fn type_flags(&mut self, _id: TypeId, name: &str, interface_name: &str, flags: &Flags, docs: &Docs) {
+    fn type_flags(
+        &mut self,
+        _id: TypeId,
+        name: &str,
+        interface_name: &str,
+        flags: &Flags,
+        docs: &Docs,
+    ) {
         self.rustdoc(docs);
         let rust_name = to_rust_upper_camel_case(name);
-        self.src.push_str("wasm_component_layer::__internal::flags!(\n");
+        self.src
+            .push_str("wasm_component_layer::__internal::flags!(\n");
         self.src.push_str(&format!("{rust_name} {{\n"));
         for flag in flags.flags.iter() {
-            uwrite!(
-                self.src,
-                "{},\n",
-                flag.name.to_upper_camel_case()
-            );
+            uwrite!(self.src, "{},\n", flag.name.to_upper_camel_case());
         }
         self.src.push_str("}\n");
         self.src.push_str(");\n\n");
         self.src.push_str("impl ");
         self.src.push_str(&rust_name);
         self.src.push_str("{\n");
-        self.src.push_str("fn get_flags_ty() -> &'static wasm_component_layer::FlagsType {\n");
+        self.src
+            .push_str("fn get_flags_ty() -> &'static wasm_component_layer::FlagsType {\n");
         self.src.push_str("static FLAGS_TY: std::sync::OnceLock<wasm_component_layer::FlagsType> = std::sync::OnceLock::new();\n");
         self.src.push_str("FLAGS_TY.get_or_init(|| {\n");
         self.src.push_str("wasm_component_layer::FlagsType::new(\n");
-        self.src.push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
+        self.src
+            .push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
         uwrite!(
             self.src,
             "\"{name}\", Some(\"{interface_name}\".try_into().unwrap())\n",
@@ -1189,29 +1198,34 @@ impl<'a> InterfaceGenerator<'a> {
         self.src.push_str(")),\n");
         self.src.push_str("[");
         for flag in flags.flags.iter() {
-            uwrite!(
-                self.src,
-                "\"{}\",",
-                flag.name
-            );
+            uwrite!(self.src, "\"{}\",", flag.name);
         }
         self.src.push_str("],\n");
         self.src.push_str(").unwrap()\n");
         self.src.push_str("})\n");
         self.src.push_str("}\n");
         self.src.push_str("}\n\n");
-        self.src.push_str("impl wasm_component_layer::ComponentType for ");
+        self.src
+            .push_str("impl wasm_component_layer::ComponentType for ");
         self.src.push_str(&rust_name);
         self.src.push_str("{\n");
-        self.src.push_str("fn ty() -> wasm_component_layer::ValueType {\n");
-        self.src.push_str("wasm_component_layer::ValueType::Flags(Self::get_flags_ty().clone())\n");
+        self.src
+            .push_str("fn ty() -> wasm_component_layer::ValueType {\n");
+        self.src
+            .push_str("wasm_component_layer::ValueType::Flags(Self::get_flags_ty().clone())\n");
         self.src.push_str("}\n\n");
-        self.src.push_str("fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n");
+        self.src.push_str(
+            "fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n",
+        );
         self.src.push_str("let flags = match value {\n");
-        self.src.push_str("wasm_component_layer::Value::Flags(flags) => flags,\n");
-        self.src.push_str("_ => anyhow::bail!(\"incorrect type, expected flags\"),\n");
+        self.src
+            .push_str("wasm_component_layer::Value::Flags(flags) => flags,\n");
+        self.src
+            .push_str("_ => anyhow::bail!(\"incorrect type, expected flags\"),\n");
         self.src.push_str("};\n");
-        self.src.push_str("anyhow::ensure!(&flags.ty() == Self::get_flags_ty(), \"incorrect flags type\");\n");
+        self.src.push_str(
+            "anyhow::ensure!(&flags.ty() == Self::get_flags_ty(), \"incorrect flags type\");\n",
+        );
         self.src.push_str("let mut this = Self::default();\n");
         for flag in flags.flags.iter() {
             uwrite!(
@@ -1223,8 +1237,11 @@ impl<'a> InterfaceGenerator<'a> {
         }
         self.src.push_str("Ok(this)\n");
         self.src.push_str("}\n\n");
-        self.src.push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
-        self.src.push_str("let mut flags = wasm_component_layer::Flags::new(Self::get_flags_ty().clone());\n");
+        self.src
+            .push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
+        self.src.push_str(
+            "let mut flags = wasm_component_layer::Flags::new(Self::get_flags_ty().clone());\n",
+        );
         for flag in flags.flags.iter() {
             uwrite!(
                 self.src,
@@ -1234,13 +1251,201 @@ impl<'a> InterfaceGenerator<'a> {
                 flag.name
             );
         }
-        self.src.push_str("Ok(wasm_component_layer::Value::Flags(flags))\n");
+        self.src
+            .push_str("Ok(wasm_component_layer::Value::Flags(flags))\n");
         self.src.push_str("}\n");
         self.src.push_str("}\n\n");
     }
 
-    fn type_variant(&mut self, _id: TypeId, _name: &str, _variant: &Variant, _docs: &Docs) {
-        unimplemented!("variant type bindgen is unimplemeted");
+    fn type_variant(
+        &mut self,
+        id: TypeId,
+        name: &str,
+        interface_name: &str,
+        variant: &Variant,
+        docs: &Docs,
+    ) {
+        let info = self.info(id);
+
+        // We use a BTree set to make sure we don't have any duplicates and have a stable order
+        let mut derives: BTreeSet<String> = self
+            .gen
+            .opts
+            .additional_derive_attributes
+            .iter()
+            .cloned()
+            .collect();
+
+        if info.is_copy() {
+            derives.extend(["Copy", "Clone"].into_iter().map(|s| s.to_string()));
+        } else if info.is_clone() {
+            derives.insert("Clone".to_string());
+        }
+
+        let rust_name = to_rust_upper_camel_case(name);
+        self.rustdoc(docs);
+
+        if !derives.is_empty() {
+            self.push_str("#[derive(");
+            self.push_str(&derives.into_iter().collect::<Vec<_>>().join(", "));
+            self.push_str(")]\n")
+        }
+
+        self.push_str(&format!("pub enum {} {{\n", rust_name));
+        for case in variant.cases.iter() {
+            self.rustdoc(&case.docs);
+            self.push_str(&case.name.to_upper_camel_case());
+            if let Some(ty) = &case.ty {
+                self.push_str("(");
+                self.print_ty(ty, TypeMode::Owned);
+                self.push_str(")")
+            }
+            self.push_str(",\n");
+        }
+        self.push_str("}\n");
+
+        self.src.push_str("impl ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        self.src
+            .push_str("fn get_variant_ty() -> &'static wasm_component_layer::VariantType {\n");
+        self.src.push_str("static VARIANT_TY: std::sync::OnceLock<wasm_component_layer::VariantType> = std::sync::OnceLock::new();\n");
+        self.src.push_str("VARIANT_TY.get_or_init(|| {\n");
+        self.src
+            .push_str("wasm_component_layer::VariantType::new(\n");
+        self.src
+            .push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
+        uwrite!(
+            self.src,
+            "\"{name}\", Some(\"{interface_name}\".try_into().unwrap())\n",
+        );
+        self.src.push_str(")),\n");
+        self.src.push_str("[\n");
+        for case in variant.cases.iter() {
+            self.src
+                .push_str("wasm_component_layer::VariantCase::new(\"");
+            self.src.push_str(&case.name);
+            self.src.push_str("\", ");
+            match &case.ty {
+                None => self.src.push_str("None"),
+                Some(ty) => {
+                    self.src.push_str("Some(<");
+                    self.print_ty(ty, TypeMode::Owned);
+                    self.src
+                        .push_str(" as wasm_component_layer::ComponentType>::ty())");
+                }
+            }
+            self.src.push_str("),\n");
+        }
+        self.src.push_str("],\n");
+        self.src.push_str(").unwrap()\n");
+        self.src.push_str("})\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
+        self.src
+            .push_str("impl wasm_component_layer::ComponentType for ");
+        self.src.push_str(&rust_name);
+        self.src.push_str("{\n");
+        self.src
+            .push_str("fn ty() -> wasm_component_layer::ValueType {\n");
+        self.src
+            .push_str("wasm_component_layer::ValueType::Variant(Self::get_variant_ty().clone())\n");
+        self.src.push_str("}\n\n");
+        self.src.push_str(
+            "fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n",
+        );
+        self.src.push_str("let variant = match value {\n");
+        self.src
+            .push_str("wasm_component_layer::Value::Variant(variant) => variant,\n");
+        self.src
+            .push_str("_ => anyhow::bail!(\"incorrect type, expected variant\"),\n");
+        self.src.push_str("};\n");
+        self.src.push_str("anyhow::ensure!(&variant.ty() == Self::get_variant_ty(), \"incorrect variant type\");\n");
+        self.src
+            .push_str("let this = match (variant.discriminant(), variant.value()) {\n");
+        for (i, case) in variant.cases.iter().enumerate() {
+            match &case.ty {
+                None => uwrite!(
+                    self.src,
+                    "({i}, None) => Self::{},",
+                    case.name.to_upper_camel_case(),
+                ),
+                Some(_) => uwrite!(
+                    self.src,
+                    "({i}, Some(v)) => Self::{}(wasm_component_layer::ComponentType::from_value(&v)?),",
+                    case.name.to_upper_camel_case(),
+                ),
+            }
+        }
+        self.src
+            .push_str("_ => anyhow::bail!(\"unexpected variant discriminant\"),\n");
+        self.src.push_str("};\n");
+        self.src.push_str("Ok(this)\n");
+        self.src.push_str("}\n\n");
+        self.src
+            .push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
+        self.src
+            .push_str("let (discriminant, value) = match self {\n");
+        for (i, case) in variant.cases.iter().enumerate() {
+            match &case.ty {
+                None => uwrite!(
+                    self.src,
+                    "Self::{} => ({i}, None),",
+                    case.name.to_upper_camel_case(),
+                ),
+                Some(_) => uwrite!(
+                    self.src,
+                    "Self::{}(v) => ({i}, Some(wasm_component_layer::ComponentType::into_value(v)?)),",
+                    case.name.to_upper_camel_case(),
+                ),
+            }
+        }
+        self.src.push_str("};\n");
+        self.src.push_str("let variant = wasm_component_layer::Variant::new(Self::get_variant_ty().clone(), discriminant, value)?;\n");
+        self.src
+            .push_str("Ok(wasm_component_layer::Value::Variant(variant))\n");
+        self.src.push_str("}\n");
+        self.src.push_str("}\n\n");
+
+        self.push_str("impl core::fmt::Debug for ");
+        self.push_str(&rust_name);
+        self.push_str("{\nfn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {\n");
+        self.push_str("match self {\n");
+        for case in variant.cases.iter() {
+            self.push_str("Self::");
+            self.push_str(&case.name.to_upper_camel_case());
+            if case.ty.is_some() {
+                self.push_str("(v)");
+            }
+            self.push_str(" => {\n");
+            self.push_str(&format!(
+                "fmt.debug_tuple(\"{}::{}\")",
+                rust_name,
+                case.name.to_upper_camel_case()
+            ));
+            if case.ty.is_some() {
+                self.push_str(".field(v)");
+            }
+            self.push_str(".finish()\n");
+            self.push_str("},\n");
+        }
+        self.push_str("}\n");
+        self.push_str("}\n");
+        self.push_str("}\n\n");
+
+        if info.error {
+            self.push_str("impl core::fmt::Display for ");
+            self.push_str(&rust_name);
+            self.push_str(" {\n");
+            self.push_str("fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {\n");
+            self.push_str("write!(fmt, \"{:?}\", self)");
+            self.push_str("}\n");
+            self.push_str("}\n\n");
+
+            self.push_str("impl std::error::Error for ");
+            self.push_str(&rust_name);
+            self.push_str(" {}\n\n");
+        }
     }
 
     fn type_option(&mut self, id: TypeId, _name: &str, payload: &Type, docs: &Docs) {
@@ -1273,7 +1478,14 @@ impl<'a> InterfaceGenerator<'a> {
         }
     }
 
-    fn type_enum(&mut self, id: TypeId, name: &str, interface_name: &str, enum_: &Enum, docs: &Docs) {
+    fn type_enum(
+        &mut self,
+        id: TypeId,
+        name: &str,
+        interface_name: &str,
+        enum_: &Enum,
+        docs: &Docs,
+    ) {
         let info = self.info(id);
 
         // We use a BTree set to make sure we don't have any duplicates and have a stable order
@@ -1308,11 +1520,13 @@ impl<'a> InterfaceGenerator<'a> {
         self.src.push_str("impl ");
         self.src.push_str(&rust_name);
         self.src.push_str("{\n");
-        self.src.push_str("fn get_enum_ty() -> &'static wasm_component_layer::EnumType {\n");
+        self.src
+            .push_str("fn get_enum_ty() -> &'static wasm_component_layer::EnumType {\n");
         self.src.push_str("static ENUM_TY: std::sync::OnceLock<wasm_component_layer::EnumType> = std::sync::OnceLock::new();\n");
         self.src.push_str("ENUM_TY.get_or_init(|| {\n");
         self.src.push_str("wasm_component_layer::EnumType::new(\n");
-        self.src.push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
+        self.src
+            .push_str("Some(wasm_component_layer::TypeIdentifier::new(\n");
         uwrite!(
             self.src,
             "\"{name}\", Some(\"{interface_name}\".try_into().unwrap())\n",
@@ -1320,30 +1534,36 @@ impl<'a> InterfaceGenerator<'a> {
         self.src.push_str(")),\n");
         self.src.push_str("[");
         for case in enum_.cases.iter() {
-            uwrite!(
-                self.src,
-                "\"{}\",",
-                case.name
-            );
+            uwrite!(self.src, "\"{}\",", case.name);
         }
         self.src.push_str("],\n");
         self.src.push_str(").unwrap()\n");
         self.src.push_str("})\n");
         self.src.push_str("}\n");
         self.src.push_str("}\n\n");
-        self.src.push_str("impl wasm_component_layer::ComponentType for ");
+        self.src
+            .push_str("impl wasm_component_layer::ComponentType for ");
         self.src.push_str(&rust_name);
         self.src.push_str("{\n");
-        self.src.push_str("fn ty() -> wasm_component_layer::ValueType {\n");
-        self.src.push_str("wasm_component_layer::ValueType::Enum(Self::get_enum_ty().clone())\n");
+        self.src
+            .push_str("fn ty() -> wasm_component_layer::ValueType {\n");
+        self.src
+            .push_str("wasm_component_layer::ValueType::Enum(Self::get_enum_ty().clone())\n");
         self.src.push_str("}\n\n");
-        self.src.push_str("fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n");
+        self.src.push_str(
+            "fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {\n",
+        );
         self.src.push_str("let enum_ = match value {\n");
-        self.src.push_str("wasm_component_layer::Value::Enum(enum_) => enum_,\n");
-        self.src.push_str("_ => anyhow::bail!(\"incorrect type, expected enum\"),\n");
+        self.src
+            .push_str("wasm_component_layer::Value::Enum(enum_) => enum_,\n");
+        self.src
+            .push_str("_ => anyhow::bail!(\"incorrect type, expected enum\"),\n");
         self.src.push_str("};\n");
-        self.src.push_str("anyhow::ensure!(&enum_.ty() == Self::get_enum_ty(), \"incorrect enum type\");\n");
-        self.src.push_str("let this = match enum_.discriminant() {\n");
+        self.src.push_str(
+            "anyhow::ensure!(&enum_.ty() == Self::get_enum_ty(), \"incorrect enum type\");\n",
+        );
+        self.src
+            .push_str("let this = match enum_.discriminant() {\n");
         for (i, case) in enum_.cases.iter().enumerate() {
             uwrite!(
                 self.src,
@@ -1351,11 +1571,13 @@ impl<'a> InterfaceGenerator<'a> {
                 case.name.to_upper_camel_case(),
             );
         }
-        self.src.push_str("_ => anyhow::bail!(\"unexpected enum discriminant\"),\n");
+        self.src
+            .push_str("_ => anyhow::bail!(\"unexpected enum discriminant\"),\n");
         self.src.push_str("};\n");
         self.src.push_str("Ok(this)\n");
         self.src.push_str("}\n\n");
-        self.src.push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
+        self.src
+            .push_str("fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {\n");
         self.src.push_str("let discriminant = match self {\n");
         for (i, case) in enum_.cases.iter().enumerate() {
             uwrite!(
@@ -1366,7 +1588,8 @@ impl<'a> InterfaceGenerator<'a> {
         }
         self.src.push_str("};\n");
         self.src.push_str("let enum_ = wasm_component_layer::Enum::new(Self::get_enum_ty().clone(), discriminant)?;\n");
-        self.src.push_str("Ok(wasm_component_layer::Value::Enum(enum_))\n");
+        self.src
+            .push_str("Ok(wasm_component_layer::Value::Enum(enum_))\n");
         self.src.push_str("}\n");
         self.src.push_str("}\n\n");
 
@@ -1443,7 +1666,11 @@ impl<'a> InterfaceGenerator<'a> {
                 self.push_str("Self::");
                 self.push_str(&case.name.to_upper_camel_case());
                 self.push_str(" => {\n");
-                self.push_str(&format!("fmt.debug_tuple(\"{}::{}\")", rust_name, case.name.to_upper_camel_case()));
+                self.push_str(&format!(
+                    "fmt.debug_tuple(\"{}::{}\")",
+                    rust_name,
+                    case.name.to_upper_camel_case()
+                ));
                 self.push_str(".finish()\n");
                 self.push_str("},\n");
             }
@@ -1519,7 +1746,7 @@ impl<'a> InterfaceGenerator<'a> {
             _ => return None,
         };
         let error_typeid = match result.err? {
-            Type::Id(id) => resolve_type_definition_id(&self.resolve, id),
+            Type::Id(id) => resolve_type_definition_id(self.resolve, id),
             _ => return None,
         };
 
@@ -1638,11 +1865,7 @@ impl<'a> InterfaceGenerator<'a> {
     }
 
     fn generate_add_function_to_linker(&mut self, owner: TypeOwner, func: &Function, linker: &str) {
-        uwrite!(
-            self.src,
-            "{linker}.func_wrap(\"{}\", ",
-            func.name
-        );
+        uwrite!(self.src, "{linker}.func_wrap(\"{}\", ", func.name);
         self.generate_guest_import_closure(owner, func);
         uwriteln!(self.src, ")?;")
     }
@@ -1694,11 +1917,11 @@ impl<'a> InterfaceGenerator<'a> {
                 .iter()
                 .enumerate()
                 .map(|(i, (name, _ty))| {
-                    let name = to_rust_ident(&name);
+                    let name = to_rust_ident(name);
                     format!("{name} = tracing::field::debug(&arg{i})")
                 })
                 .collect::<Vec<String>>();
-            event_fields.push(format!("\"call\""));
+            event_fields.push(String::from("\"call\""));
             uwrite!(
                 self.src,
                 "tracing::event!(tracing::Level::TRACE, {});\n",
@@ -1739,7 +1962,7 @@ impl<'a> InterfaceGenerator<'a> {
             );
         }
 
-        if !self.gen.opts.trappable_imports.can_trap(&func) {
+        if !self.gen.opts.trappable_imports.can_trap(func) {
             if func.results.iter_types().len() == 1 {
                 uwrite!(self.src, "Ok((r,))\n");
             } else {
@@ -1754,7 +1977,7 @@ impl<'a> InterfaceGenerator<'a> {
             };
             let convert_trait = match self.path_to_interface(owner) {
                 Some(path) => format!("{path}::Host"),
-                None => format!("Host"),
+                None => String::from("Host"),
             };
             let convert = format!("{}::convert_{}", convert_trait, err_name.to_snake_case());
             uwrite!(
@@ -1822,7 +2045,8 @@ impl<'a> InterfaceGenerator<'a> {
         let snake = func_field_name(self.resolve, func);
         uwrite!(self.src, "__exports.func(\"");
         self.src.push_str(&func.name);
-        self.src.push_str("\").ok_or_else(|| anyhow::anyhow!(\"exported function `");
+        self.src
+            .push_str("\").ok_or_else(|| anyhow::anyhow!(\"exported function `");
         self.src.push_str(&func.name);
         self.src.push_str("` not present\"))?.typed()?");
 
@@ -2023,17 +2247,17 @@ fn func_field_name(resolve: &Resolve, func: &Function) -> String {
         FunctionKind::Method(id) => {
             name.push_str("method-");
             name.push_str(resolve.types[id].name.as_ref().unwrap());
-            name.push_str("-");
+            name.push('-');
         }
         FunctionKind::Static(id) => {
             name.push_str("static-");
             name.push_str(resolve.types[id].name.as_ref().unwrap());
-            name.push_str("-");
+            name.push('-');
         }
         FunctionKind::Constructor(id) => {
             name.push_str("constructor-");
             name.push_str(resolve.types[id].name.as_ref().unwrap());
-            name.push_str("-");
+            name.push('-');
         }
         FunctionKind::Freestanding => {}
     }
@@ -2041,7 +2265,7 @@ fn func_field_name(resolve: &Resolve, func: &Function) -> String {
     name.to_snake_case()
 }
 
-fn get_resources<'a>(resolve: &'a Resolve, id: InterfaceId) -> impl Iterator<Item = &'a str> + 'a {
+fn get_resources(resolve: &Resolve, id: InterfaceId) -> impl Iterator<Item = &'_ str> + '_ {
     resolve.interfaces[id]
         .types
         .iter()
@@ -2051,10 +2275,10 @@ fn get_resources<'a>(resolve: &'a Resolve, id: InterfaceId) -> impl Iterator<Ite
         })
 }
 
-fn get_world_resources<'a>(
-    resolve: &'a Resolve,
+fn get_world_resources(
+    resolve: &Resolve,
     id: WorldId,
-) -> impl Iterator<Item = &'a str> + 'a {
+) -> impl Iterator<Item = &'_ str> + '_ {
     resolve.worlds[id]
         .imports
         .iter()

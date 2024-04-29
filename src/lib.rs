@@ -93,7 +93,11 @@ pub mod __internal {
     pub use wasm_component_layer_macro::flags;
 
     /// Format the specified bitflags using the specified names for debugging
-    pub fn format_flags(bits: &[u32], names: &[&str], f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    pub fn format_flags(
+        bits: &[u32],
+        names: &[&str],
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
         f.write_str("(")?;
         let mut wrote = false;
         for (index, name) in names.iter().enumerate() {
@@ -753,7 +757,7 @@ impl Component {
                             .is_none(),
                         "Duplicate function definition."
                     );
-                },
+                }
                 wasmtime_environ::component::Export::Instance { exports, .. } => {
                     let id = match item {
                         WorldItem::Interface(id) => *id,
@@ -820,10 +824,10 @@ impl Component {
                 // This can't be tested at this time so leave it unimplemented
                 wasmtime_environ::component::Export::ModuleStatic(_) => {
                     bail!("Not yet implemented.")
-                },
+                }
                 wasmtime_environ::component::Export::ModuleImport { .. } => {
                     bail!("Not yet implemented.")
-                },
+                }
             }
         }
 
@@ -1713,14 +1717,22 @@ impl Instance {
                         )))
                     }
                     GeneratedTrampoline::Utf8CopyTranscoder { from, to } => {
-                        let from_memory = Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&from])
-                            .expect("Could not get runtime memory export.")
-                            .into_memory()
-                            .expect("Export was not of memory type.");
-                        let to_memory = Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&to])
-                            .expect("Could not get runtime memory export.")
-                            .into_memory()
-                            .expect("Export was not of memory type.");
+                        let from_memory = Self::core_export(
+                            inner,
+                            &ctx,
+                            &inner.component.0.extracted_memories[&from],
+                        )
+                        .expect("Could not get runtime memory export.")
+                        .into_memory()
+                        .expect("Export was not of memory type.");
+                        let to_memory = Self::core_export(
+                            inner,
+                            &ctx,
+                            &inner.component.0.extracted_memories[&to],
+                        )
+                        .expect("Could not get runtime memory export.")
+                        .into_memory()
+                        .expect("Export was not of memory type.");
                         let from = from.as_u32();
                         let to = to.as_u32();
                         let ty = ty.with_name(format!("transcode-copy-utf8-{}-{}", from, to));
@@ -1760,8 +1772,16 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args: &[wasm_runtime_layer::Value], results| {
-                                ensure!(args.is_empty(), "always-trap() called with unexpected args {:?}", args);
-                                ensure!(results.is_empty(), "always-trap() call expects unexpected results {:?}", results);
+                                ensure!(
+                                    args.is_empty(),
+                                    "always-trap() called with unexpected args {:?}",
+                                    args
+                                );
+                                ensure!(
+                                    results.is_empty(),
+                                    "always-trap() call expects unexpected results {:?}",
+                                    results
+                                );
                                 Err(wasmtime_environ::Trap::AlwaysTrapAdapter.into())
                             },
                         )))
@@ -1799,7 +1819,10 @@ impl Instance {
                                     .expect("Could not get mutable reference to table.");
                                 let from_table = &mut table_array[from_rid];
                                 let handle_borrow = from_table.get(*handle)?;
-                                ensure!(handle_borrow.own, "Attempted to owning-transfer a non-owned resource");
+                                ensure!(
+                                    handle_borrow.own,
+                                    "Attempted to owning-transfer a non-owned resource"
+                                );
                                 ensure!(
                                     handle_borrow.lend_count == 0,
                                     "Attempted to owning-transfer a loaned resource."
@@ -1888,15 +1911,23 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
-                                ensure!(args.is_empty(), "resource-enter-call() called with unexpected args {:?}", args);
-                                ensure!(results.is_empty(), "resource-enter-call() call expects unexpected results {:?}", results);
+                                ensure!(
+                                    args.is_empty(),
+                                    "resource-enter-call() called with unexpected args {:?}",
+                                    args
+                                );
+                                ensure!(
+                                    results.is_empty(),
+                                    "resource-enter-call() call expects unexpected results {:?}",
+                                    results
+                                );
                                 // As in Jco, ResourceEnterCall is a no-op since all logic
                                 //  is handled in ResourceEnterCall and resource_call_borrows
                                 //  should be empty here
-                                let resource_call_borrows = tables
-                                    .resource_call_borrows
-                                    .try_lock()
-                                    .expect("Could not get mutable reference to resource call borrows.");
+                                let resource_call_borrows =
+                                    tables.resource_call_borrows.try_lock().expect(
+                                        "Could not get mutable reference to resource call borrows.",
+                                    );
                                 assert!(resource_call_borrows.is_empty());
                                 Ok(())
                             },
@@ -1909,18 +1940,29 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
-                                ensure!(args.is_empty(), "resource-exit-call() called with unexpected args {:?}", args);
-                                ensure!(results.is_empty(), "resource-exit-call() call expects unexpected results {:?}", results);
+                                ensure!(
+                                    args.is_empty(),
+                                    "resource-exit-call() called with unexpected args {:?}",
+                                    args
+                                );
+                                ensure!(
+                                    results.is_empty(),
+                                    "resource-exit-call() call expects unexpected results {:?}",
+                                    results
+                                );
                                 let table_array = tables
                                     .resource_tables
                                     .try_lock()
                                     .expect("Could not get mutable reference to table.");
-                                let mut resource_call_borrows = tables
-                                    .resource_call_borrows
-                                    .try_lock()
-                                    .expect("Could not get mutable reference to resource call borrows.");
+                                let mut resource_call_borrows =
+                                    tables.resource_call_borrows.try_lock().expect(
+                                        "Could not get mutable reference to resource call borrows.",
+                                    );
                                 for (rid, handle) in resource_call_borrows.iter().copied() {
-                                    ensure!(!table_array[rid].contains(handle), "Borrow was not dropped for resource transfer call.");
+                                    ensure!(
+                                        !table_array[rid].contains(handle),
+                                        "Borrow was not dropped for resource transfer call."
+                                    );
                                 }
                                 resource_call_borrows.clear();
                                 Ok(())

@@ -17,9 +17,9 @@ pub fn main() {
     // Parse the component bytes and load its imports and exports.
     let component = Component::new(&engine, WASM).unwrap();
     // Create a linker that will be used to resolve the component's imports, if any.
-    let mut linker = Linker::default();
+    let linker = Linker::default();
     // Create an instance of the component using the linker.
-    let (instance, _instance) = Guest::instantiate(&mut store, &component, &mut linker).unwrap();
+    let (instance, _instance) = Guest::instantiate(&mut store, &component, &linker).unwrap();
 
     // Get the interface that the interface exports.
     let interface = instance.test_guest_foo();
@@ -32,14 +32,18 @@ pub fn main() {
 
     println!(
         "Calling select-nth({example:?}, 1) == {:?}",
-        interface.call_select_nth(&mut store, example.clone(), 1).unwrap()
+        interface
+            .call_select_nth(&mut store, example.clone(), 1)
+            .unwrap()
     );
     // Prints 'Calling select-nth(["a", "b", "c"], 1) == "b"'
 
     let flags = exports::test::guest::foo::MyFlags::OptB;
     println!(
         "Calling select-other-flags({flags:?}) == {:?}",
-        interface.call_select_other_flags(&mut store, flags).unwrap()
+        interface
+            .call_select_other_flags(&mut store, flags)
+            .unwrap()
     );
     // Prints 'Calling select-other-flags((OptB)) == (OptA|OptC)'
 
@@ -49,4 +53,13 @@ pub fn main() {
         interface.call_debug_enum_case(&mut store, case).unwrap()
     );
     // Prints 'Calling debug-enum-case(MyEnum::CaseC) == "MyEnum::CaseC"'
+
+    let bytes = vec![1_u8, 2, 3];
+    println!(
+        "Calling pack-bytes-into-variant({bytes:?}) == {:?}",
+        interface
+            .call_pack_bytes_into_variant(&mut store, bytes.clone())
+            .unwrap()
+    );
+    // Prints 'Calling pack-bytes-into-variant([1, 2, 3]) == MyVariant::List([1, 2, 3])'
 }

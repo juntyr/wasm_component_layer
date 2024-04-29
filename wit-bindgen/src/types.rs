@@ -190,3 +190,13 @@ impl Types {
         }
     }
 }
+
+impl TypeInfo {
+    pub fn is_copy(&self) -> bool {
+        !self.has_list && !self.has_handle
+    }
+
+    pub fn is_clone(&self) -> bool {
+        !self.has_handle
+    }
+}
