@@ -1,15 +1,20 @@
 package test:guest;
 
 interface foo {
-    use bar.{myresource};
+    /*use bar.{myresource};
     // Creates and uses a resource
     use-resource: func();
     // Creates and uses a resource
     consume-resource: func(a: myresource);
+    */
+    /*resource guest-resource {
+        constructor(a: s32);
+        print-a: func();
+    }*/
 }
 
 interface bar {
-    resource myresource { 
+    resource host-resource { 
         constructor(a: s32);
         print-a: func();
     }

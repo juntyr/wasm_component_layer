@@ -243,12 +243,10 @@ pub trait RustGenerator<'a> {
             _ => true,
         };
         if is_host_defined {
-            self.push_str("wasmtime::component::Resource<");
             self.print_type_name_in_interface(
                 ty.owner,
                 &ty.name.as_ref().unwrap().to_upper_camel_case(),
             );
-            self.push_str(">");
         } else {
             self.push_str("wasmtime::component::ResourceAny");
         }

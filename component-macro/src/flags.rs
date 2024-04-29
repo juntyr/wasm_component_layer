@@ -209,7 +209,10 @@ pub fn expand_flags(flags: &Flags) -> Result<TokenStream> {
 
         let name = format_ident!("{}", name);
 
-        constants.extend(quote!(pub const #name: Self = Self { #fields };));
+        constants.extend(quote! {
+            #[allow(non_upper_case_globals)]
+            pub const #name: Self = Self { #fields };
+        });
     }
 
     let fields = {

@@ -282,7 +282,7 @@ impl Bindgen {
                 // resource-related functions get their trait signatures
                 // during `type_resource`.
                 if let FunctionKind::Freestanding = func.kind {
-                    gen.generate_function_trait_sig(func);
+                    gen.generate_function_trait_sig(func, None);
                 }
                 let sig = mem::take(&mut gen.src).into();
                 gen.generate_add_function_to_linker(TypeOwner::World(world), func, "linker");
@@ -859,11 +859,10 @@ impl Bindgen {
         uwrite!(
             self.src,
             "
-                pub fn add_to_linker<T, U>(
+                pub fn add_to_linker<T>(
                     linker: &mut wasm_component_layer::Linker,
-                    get: impl Fn(&mut T) -> &mut U + Send + Sync + Copy + 'static,
                 ) -> anyhow::Result<()>
-                    where U: \
+                    where T: \
             "
         );
         let world_camel = to_rust_upper_camel_case(&resolve.worlds[world].name);
@@ -886,10 +885,10 @@ impl Bindgen {
 
         self.src.push_str(",\n{\n");
         for name in interfaces.iter() {
-            uwriteln!(self.src, "{name}::add_to_linker(linker, get)?;");
+            uwriteln!(self.src, "{name}::add_to_linker::<T>(linker)?;");
         }
         if has_world_trait {
-            uwriteln!(self.src, "Self::add_root_to_linker(linker, get)?;");
+            uwriteln!(self.src, "Self::add_root_to_linker::<T>(linker)?;");
         }
         uwriteln!(self.src, "Ok(())\n}}");
         if !has_world_trait {
@@ -908,19 +907,19 @@ impl Bindgen {
                     let mut linker = linker.root();
             ",
         );
-        for name in get_world_resources(resolve, world) {
-            let camel = name.to_upper_camel_case();
-            uwriteln!(
-                self.src,
-                "linker.resource(
-                    \"{name}\",
-                    wasmtime::component::ResourceType::host::<{camel}>(),
-                    move |mut store, rep| -> anyhow::Result<()> {{
-                        Host{camel}::drop(get(store.data_mut()), wasmtime::component::Resource::new_own(rep))
-                    }},
-                )?;"
-            )
-        }
+        // for name in get_world_resources(resolve, world) {
+        //     let camel = name.to_upper_camel_case();
+        //     uwriteln!(
+        //         self.src,
+        //         "linker.resource(
+        //             \"{name}\",
+        //             wasmtime::component::ResourceType::host::<{camel}>(),
+        //             move |mut store, rep| -> anyhow::Result<()> {{
+        //                 Host{camel}::drop(get(store.data_mut()), wasmtime::component::Resource::new_own(rep))
+        //             }},
+        //         )?;"
+        //     )
+        // }
 
         for f in self.import_functions.iter() {
             self.src.push_str(&f.add_to_linker);
@@ -1071,27 +1070,27 @@ impl<'a> InterfaceGenerator<'a> {
         let camel = name.to_upper_camel_case();
 
         if self.types_imported() {
-            self.rustdoc(docs);
+            // self.rustdoc(docs);
 
-            let replacement = match self.current_interface {
-                Some((_, key, _)) => self.gen.lookup_replacement(self.resolve, key, Some(name)),
-                None => {
-                    self.gen.used_with_opts.insert(name.into());
-                    self.gen.opts.with.get(name).cloned()
-                }
-            };
-            match replacement {
-                Some(path) => {
-                    uwriteln!(
-                        self.src,
-                        "pub use {}{path} as {camel};",
-                        self.path_to_root()
-                    );
-                }
-                None => {
-                    uwriteln!(self.src, "pub enum {camel} {{}}");
-                }
-            }
+            // let replacement = match self.current_interface {
+            //     Some((_, key, _)) => self.gen.lookup_replacement(self.resolve, key, Some(name)),
+            //     None => {
+            //         self.gen.used_with_opts.insert(name.into());
+            //         self.gen.opts.with.get(name).cloned()
+            //     }
+            // };
+            // match replacement {
+            //     Some(path) => {
+            //         uwriteln!(
+            //             self.src,
+            //             "pub use {}{path} as {camel};",
+            //             self.path_to_root()
+            //         );
+            //     }
+            //     None => {
+            //         uwriteln!(self.src, "pub enum {camel} {{}}");
+            //     }
+            // }
 
             uwriteln!(self.src, "pub trait Host{camel} {{");
 
@@ -1122,26 +1121,27 @@ impl<'a> InterfaceGenerator<'a> {
                     _ => continue,
                 }
 
-                self.generate_function_trait_sig(func);
+                // self.generate_function_trait_sig(func, Some(id));
             }
 
-            uwrite!(
-                self.src,
-                "fn drop(&mut self, rep: wasmtime::component::Resource<{camel}>) -> anyhow::Result<()>;");
+            // uwrite!(
+            //     self.src,
+            //     "fn drop(&mut self, rep: wasmtime::component::Resource<{camel}>) -> anyhow::Result<()>;"
+            // );
 
             uwriteln!(self.src, "}}");
         } else {
-            self.rustdoc(docs);
-            uwriteln!(
-                self.src,
-                "
-                    pub type {camel} = wasmtime::component::ResourceAny;
+            // self.rustdoc(docs);
+            // uwriteln!(
+            //     self.src,
+            //     "
+            //         pub type {camel} = wasmtime::component::ResourceAny;
 
-                    pub struct Guest{camel}<'a> {{
-                        funcs: &'a Guest,
-                    }}
-                "
-            );
+            //         pub struct Guest{camel}<'a> {{
+            //             funcs: &'a Guest,
+            //         }}
+            //     "
+            // );
         }
     }
 
@@ -1941,22 +1941,16 @@ impl<'a> InterfaceGenerator<'a> {
         // Generate the `pub trait` which represents the host functionality for
         // this import which additionally inherits from all resource traits
         // for this interface defined by `type_resource`.
-        uwrite!(self.src, "pub trait Host");
-        for (i, resource) in get_resources(self.resolve, id).enumerate() {
-            if i == 0 {
-                uwrite!(self.src, ": ");
-            } else {
-                uwrite!(self.src, " + ");
-            }
-            uwrite!(self.src, "Host{}", resource.to_upper_camel_case());
+        uwrite!(self.src, "pub trait Host {{");
+        for resource in get_resources(self.resolve, id) {
+            uwrite!(self.src, "type {}: Host{};\n", resource.to_upper_camel_case(), resource.to_upper_camel_case());
         }
-        uwriteln!(self.src, " {{");
         for (_, func) in iface.functions.iter() {
             match func.kind {
                 FunctionKind::Freestanding => {}
                 _ => continue,
             }
-            self.generate_function_trait_sig(func);
+            self.generate_function_trait_sig(func, None);
         }
 
         // Generate `convert_*` functions to convert custom trappable errors
@@ -2000,7 +1994,7 @@ impl<'a> InterfaceGenerator<'a> {
         }
         uwriteln!(self.src, "}}");
 
-        let mut where_clause = String::from("U: Host");
+        let mut where_clause = String::from("T: Host");
 
         for t in required_conversion_traits {
             where_clause.push_str(" + ");
@@ -2010,28 +2004,27 @@ impl<'a> InterfaceGenerator<'a> {
         uwriteln!(
             self.src,
             "
-                pub fn add_to_linker<T, U>(
+                pub fn add_to_linker<T>(
                     linker: &mut wasm_component_layer::Linker,
-                    get: impl Fn(&mut T) -> &mut U + Send + Sync + Copy + 'static,
                 ) -> anyhow::Result<()>
                     where {where_clause}
                 {{
             "
         );
-        uwriteln!(self.src, "let mut inst = linker.instance(\"{name}\")?;");
+        uwriteln!(self.src, "let mut inst = linker.define_instance(\"{name}\".try_into().unwrap())?;");
 
         for name in get_resources(self.resolve, id) {
-            let camel = name.to_upper_camel_case();
-            uwriteln!(
-                self.src,
-                "inst.resource(
-                    \"{name}\",
-                    wasmtime::component::ResourceType::host::<{camel}>(),
-                    move |mut store, rep| -> anyhow::Result<()> {{
-                        Host{camel}::drop(get(store.data_mut()), wasmtime::component::Resource::new_own(rep))
-                    }},
-                )?;"
-            )
+            // let camel = name.to_upper_camel_case();
+            // uwriteln!(
+            //     self.src,
+            //     "inst.resource(
+            //         \"{name}\",
+            //         wasmtime::component::ResourceType::host::<{camel}>(),
+            //         move |mut store, rep| -> anyhow::Result<()> {{
+            //             Host{camel}::drop(get(store.data_mut()), wasmtime::component::Resource::new_own(rep))
+            //         }},
+            //     )?;"
+            // )
         }
 
         for (_, func) in iface.functions.iter() {
@@ -2042,9 +2035,9 @@ impl<'a> InterfaceGenerator<'a> {
     }
 
     fn generate_add_function_to_linker(&mut self, owner: TypeOwner, func: &Function, linker: &str) {
-        uwrite!(self.src, "{linker}.func_wrap(\"{}\", ", func.name);
-        self.generate_guest_import_closure(owner, func);
-        uwriteln!(self.src, ")?;")
+        // uwrite!(self.src, "{linker}.func_wrap(\"{}\", ", func.name);
+        // self.generate_guest_import_closure(owner, func);
+        // uwriteln!(self.src, ")?;")
     }
 
     fn generate_guest_import_closure(&mut self, owner: TypeOwner, func: &Function) {
@@ -2173,7 +2166,7 @@ impl<'a> InterfaceGenerator<'a> {
         self.src.push_str("}");
     }
 
-    fn generate_function_trait_sig(&mut self, func: &Function) {
+    fn generate_function_trait_sig(&mut self, func: &Function, resource: Option<TypeId>) {
         self.rustdoc(&func.docs);
 
         self.push_str("fn ");
@@ -2183,14 +2176,14 @@ impl<'a> InterfaceGenerator<'a> {
             let name = to_rust_ident(name);
             self.push_str(&name);
             self.push_str(": ");
-            self.print_ty(param, TypeMode::Owned);
+            self.print_ty(param, TypeMode::Owned/*, resource*/);
             self.push_str(",");
         }
         self.push_str(")");
         self.push_str(" -> ");
 
         if !self.gen.opts.trappable_imports.can_trap(func) {
-            self.print_result_ty(&func.results, TypeMode::Owned);
+            self.print_result_ty(&func.results, TypeMode::Owned/*, resource*/);
         } else if let Some((r, _id, error_typename)) =
             self.special_case_trappable_error(&func.results)
         {
@@ -2199,7 +2192,7 @@ impl<'a> InterfaceGenerator<'a> {
             // for them to trap or use `?` to propogate their errors
             self.push_str("Result<");
             if let Some(ok) = r.ok {
-                self.print_ty(&ok, TypeMode::Owned);
+                self.print_ty(&ok, TypeMode::Owned/*, resource*/);
             } else {
                 self.push_str("()");
             }
@@ -2210,7 +2203,7 @@ impl<'a> InterfaceGenerator<'a> {
             // All other functions get their return values wrapped in an anyhow::Result.
             // Returning the anyhow::Error case can be used to trap.
             self.push_str("anyhow::Result<");
-            self.print_result_ty(&func.results, TypeMode::Owned);
+            self.print_result_ty(&func.results, TypeMode::Owned/*, resource*/);
             self.push_str(">");
         }
 
