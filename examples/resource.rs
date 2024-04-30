@@ -21,7 +21,7 @@ pub fn main() {
     let mut linker = Linker::default();
 
     // Add the host-defined exports to the linker
-    Guest::add_to_linker::<Host>(&mut linker).unwrap();
+    Guest::add_to_linker::<_, Host>(&mut store, &mut linker).unwrap();
 
     // Create an instance of the component using the linker.
     let (instance, _instance) = Guest::instantiate(&mut store, &component, &linker).unwrap();

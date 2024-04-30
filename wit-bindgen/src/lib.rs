@@ -859,10 +859,11 @@ impl Bindgen {
         uwrite!(
             self.src,
             "
-                pub fn add_to_linker<T>(
+                pub fn add_to_linker<T, U>(
+                    mut ctx: impl wasm_component_layer::AsContextMut<UserState = T>,
                     linker: &mut wasm_component_layer::Linker,
                 ) -> anyhow::Result<()>
-                    where T: \
+                    where U: \
             "
         );
         let world_camel = to_rust_upper_camel_case(&resolve.worlds[world].name);
@@ -884,8 +885,9 @@ impl Bindgen {
         }
 
         self.src.push_str(",\n{\n");
+        self.src.push_str("let mut ctx = ctx.as_context_mut();\n");
         for name in interfaces.iter() {
-            uwriteln!(self.src, "{name}::add_to_linker::<T>(linker)?;");
+            uwriteln!(self.src, "{name}::add_to_linker::<T, U>(&mut ctx, linker)?;");
         }
         if has_world_trait {
             uwriteln!(self.src, "Self::add_root_to_linker::<T>(linker)?;");
@@ -1943,7 +1945,7 @@ impl<'a> InterfaceGenerator<'a> {
         // for this interface defined by `type_resource`.
         uwrite!(self.src, "pub trait Host {{");
         for resource in get_resources(self.resolve, id) {
-            uwrite!(self.src, "type {}: Host{};\n", resource.to_upper_camel_case(), resource.to_upper_camel_case());
+            uwrite!(self.src, "type {}: 'static + Send + Sync + Host{};\n", resource.to_upper_camel_case(), resource.to_upper_camel_case());
         }
         for (_, func) in iface.functions.iter() {
             match func.kind {
@@ -1994,7 +1996,7 @@ impl<'a> InterfaceGenerator<'a> {
         }
         uwriteln!(self.src, "}}");
 
-        let mut where_clause = String::from("T: Host");
+        let mut where_clause = String::from("U: Host");
 
         for t in required_conversion_traits {
             where_clause.push_str(" + ");
@@ -2004,27 +2006,42 @@ impl<'a> InterfaceGenerator<'a> {
         uwriteln!(
             self.src,
             "
-                pub fn add_to_linker<T>(
+                pub fn add_to_linker<T, U>(
+                    mut ctx: impl wasm_component_layer::AsContextMut<UserState = T>,
                     linker: &mut wasm_component_layer::Linker,
                 ) -> anyhow::Result<()>
                     where {where_clause}
                 {{
             "
         );
+        self.src.push_str("let mut ctx = ctx.as_context_mut();\n");
         uwriteln!(self.src, "let mut inst = linker.define_instance(\"{name}\".try_into().unwrap())?;");
 
+        let interface_name = name;
+
         for name in get_resources(self.resolve, id) {
-            // let camel = name.to_upper_camel_case();
-            // uwriteln!(
-            //     self.src,
-            //     "inst.resource(
-            //         \"{name}\",
-            //         wasmtime::component::ResourceType::host::<{camel}>(),
-            //         move |mut store, rep| -> anyhow::Result<()> {{
-            //             Host{camel}::drop(get(store.data_mut()), wasmtime::component::Resource::new_own(rep))
-            //         }},
-            //     )?;"
-            // )
+            let snake = name.to_snake_case();
+            let camel = name.to_upper_camel_case();
+            
+            // TODO: move the resource type definition into a newly generated type we control
+            //       or maybe we can even put it into the host resource trait by adding a
+            //       trait method with a default impl that cannot be implemented or called
+            //       without a private token type that only we have
+            uwriteln!(
+                self.src,
+                "let {snake}_ty = wasm_component_layer::ResourceType::new::<U::{camel}>(Some(
+                    wasm_component_layer::TypeIdentifier::new(\"{name}\", Some(
+                        \"{interface_name}\".try_into().unwrap()
+                    ))
+                ));"
+            );
+            uwriteln!(
+                self.src,
+                "inst.define_resource(
+                    \"{name}\",
+                    {snake}_ty,
+                )?;"
+            )
         }
 
         for (_, func) in iface.functions.iter() {
@@ -2035,134 +2052,136 @@ impl<'a> InterfaceGenerator<'a> {
     }
 
     fn generate_add_function_to_linker(&mut self, owner: TypeOwner, func: &Function, linker: &str) {
-        // uwrite!(self.src, "{linker}.func_wrap(\"{}\", ", func.name);
-        // self.generate_guest_import_closure(owner, func);
-        // uwriteln!(self.src, ")?;")
+        uwrite!(self.src, "{linker}.define_func(\"{}\", wasm_component_layer::Func::new(&mut ctx, todo!(), ", func.name);
+        self.generate_guest_import_closure(owner, func);
+        uwriteln!(self.src, "))?;")
     }
 
     fn generate_guest_import_closure(&mut self, owner: TypeOwner, func: &Function) {
         // Generate the closure that's passed to a `Linker`, the final piece of
         // codegen here.
 
-        self.src
-            .push_str("move |mut caller: wasm_component_layer::StoreContextMut<'_, T, _>, (");
-        for (i, _param) in func.params.iter().enumerate() {
-            uwrite!(self.src, "arg{},", i);
-        }
-        self.src.push_str(") : (");
+        self.src.push_str("|\n");
+        self.src.push_str("mut ctx: wasm_component_layer::StoreContextMut<'_, T, _>,\n");
+        self.src.push_str("arguments: &[wasm_component_layer::Value],\n");
+        self.src.push_str("results: &mut [wasm_component_layer::Value],\n");
+        self.src.push_str("| -> anyhow::Result<()> {\n");
+        // for (i, _param) in func.params.iter().enumerate() {
+        //     uwrite!(self.src, "arg{},", i);
+        // }
+        // self.src.push_str(") : (");
 
-        for (_, ty) in func.params.iter() {
-            // Lift is required to be impled for this type, so we can't use
-            // a borrowed type:
-            self.print_ty(ty, TypeMode::Owned);
-            self.src.push_str(", ");
-        }
-        self.src.push_str(") |");
-        self.src.push_str(" { \n");
+        // for (_, ty) in func.params.iter() {
+        //     // Lift is required to be impled for this type, so we can't use
+        //     // a borrowed type:
+        //     self.print_ty(ty, TypeMode::Owned);
+        //     self.src.push_str(", ");
+        // }
 
-        if self.gen.opts.tracing {
-            uwrite!(
-                self.src,
-                "
-                   let span = tracing::span!(
-                       tracing::Level::TRACE,
-                       \"wit-bindgen import\",
-                       module = \"{}\",
-                       function = \"{}\",
-                   );
-                   let _enter = span.enter();
-               ",
-                match owner {
-                    TypeOwner::Interface(id) => self.resolve.interfaces[id]
-                        .name
-                        .as_deref()
-                        .unwrap_or("<no module>"),
-                    TypeOwner::World(id) => &self.resolve.worlds[id].name,
-                    TypeOwner::None => "<no owner>",
-                },
-                func.name,
-            );
-            let mut event_fields = func
-                .params
-                .iter()
-                .enumerate()
-                .map(|(i, (name, _ty))| {
-                    let name = to_rust_ident(name);
-                    format!("{name} = tracing::field::debug(&arg{i})")
-                })
-                .collect::<Vec<String>>();
-            event_fields.push(String::from("\"call\""));
-            uwrite!(
-                self.src,
-                "tracing::event!(tracing::Level::TRACE, {});\n",
-                event_fields.join(", ")
-            );
-        }
+        // if self.gen.opts.tracing {
+        //     uwrite!(
+        //         self.src,
+        //         "
+        //            let span = tracing::span!(
+        //                tracing::Level::TRACE,
+        //                \"wit-bindgen import\",
+        //                module = \"{}\",
+        //                function = \"{}\",
+        //            );
+        //            let _enter = span.enter();
+        //        ",
+        //         match owner {
+        //             TypeOwner::Interface(id) => self.resolve.interfaces[id]
+        //                 .name
+        //                 .as_deref()
+        //                 .unwrap_or("<no module>"),
+        //             TypeOwner::World(id) => &self.resolve.worlds[id].name,
+        //             TypeOwner::None => "<no owner>",
+        //         },
+        //         func.name,
+        //     );
+        //     let mut event_fields = func
+        //         .params
+        //         .iter()
+        //         .enumerate()
+        //         .map(|(i, (name, _ty))| {
+        //             let name = to_rust_ident(name);
+        //             format!("{name} = tracing::field::debug(&arg{i})")
+        //         })
+        //         .collect::<Vec<String>>();
+        //     event_fields.push(String::from("\"call\""));
+        //     uwrite!(
+        //         self.src,
+        //         "tracing::event!(tracing::Level::TRACE, {});\n",
+        //         event_fields.join(", ")
+        //     );
+        // }
 
-        self.src.push_str("let host = get(caller.data_mut());\n");
-        let func_name = rust_function_name(func);
-        let host_trait = match func.kind {
-            FunctionKind::Freestanding => match owner {
-                TypeOwner::World(id) => format!(
-                    "{}Imports",
-                    self.resolve.worlds[id].name.to_upper_camel_case()
-                ),
-                _ => "Host".to_string(),
-            },
-            FunctionKind::Method(id) | FunctionKind::Static(id) | FunctionKind::Constructor(id) => {
-                let resource = self.resolve.types[id]
-                    .name
-                    .as_ref()
-                    .unwrap()
-                    .to_upper_camel_case();
-                format!("Host{resource}")
-            }
-        };
-        uwrite!(self.src, "let r = {host_trait}::{func_name}(host, ");
+        // self.src.push_str("let host = get(caller.data_mut());\n");
+        // let func_name = rust_function_name(func);
+        // let host_trait = match func.kind {
+        //     FunctionKind::Freestanding => match owner {
+        //         TypeOwner::World(id) => format!(
+        //             "{}Imports",
+        //             self.resolve.worlds[id].name.to_upper_camel_case()
+        //         ),
+        //         _ => "Host".to_string(),
+        //     },
+        //     FunctionKind::Method(id) | FunctionKind::Static(id) | FunctionKind::Constructor(id) => {
+        //         let resource = self.resolve.types[id]
+        //             .name
+        //             .as_ref()
+        //             .unwrap()
+        //             .to_upper_camel_case();
+        //         format!("Host{resource}")
+        //     }
+        // };
+        // uwrite!(self.src, "let r = {host_trait}::{func_name}(host, ");
 
-        for (i, _) in func.params.iter().enumerate() {
-            uwrite!(self.src, "arg{},", i);
-        }
-        uwrite!(self.src, ");\n");
+        // for (i, _) in func.params.iter().enumerate() {
+        //     uwrite!(self.src, "arg{},", i);
+        // }
+        // uwrite!(self.src, ");\n");
 
-        if self.gen.opts.tracing {
-            uwrite!(
-                self.src,
-                "tracing::event!(tracing::Level::TRACE, result = tracing::field::debug(&r), \"return\");"
-            );
-        }
+        // if self.gen.opts.tracing {
+        //     uwrite!(
+        //         self.src,
+        //         "tracing::event!(tracing::Level::TRACE, result = tracing::field::debug(&r), \"return\");"
+        //     );
+        // }
 
-        if !self.gen.opts.trappable_imports.can_trap(func) {
-            if func.results.iter_types().len() == 1 {
-                uwrite!(self.src, "Ok((r,))\n");
-            } else {
-                uwrite!(self.src, "Ok(r)\n");
-            }
-        } else if let Some((_, err, _)) = self.special_case_trappable_error(&func.results) {
-            let err = &self.resolve.types[resolve_type_definition_id(self.resolve, err)];
-            let err_name = err.name.as_ref().unwrap();
-            let owner = match err.owner {
-                TypeOwner::Interface(i) => i,
-                _ => unimplemented!(),
-            };
-            let convert_trait = match self.path_to_interface(owner) {
-                Some(path) => format!("{path}::Host"),
-                None => String::from("Host"),
-            };
-            let convert = format!("{}::convert_{}", convert_trait, err_name.to_snake_case());
-            uwrite!(
-                self.src,
-                "Ok((match r {{
-                    Ok(a) => Ok(a),
-                    Err(e) => Err({convert}(host, e)?),
-                }},))"
-            );
-        } else if func.results.iter_types().len() == 1 {
-            uwrite!(self.src, "Ok((r?,))\n");
-        } else {
-            uwrite!(self.src, "r\n");
-        }
+        // if !self.gen.opts.trappable_imports.can_trap(func) {
+        //     if func.results.iter_types().len() == 1 {
+        //         uwrite!(self.src, "Ok((r,))\n");
+        //     } else {
+        //         uwrite!(self.src, "Ok(r)\n");
+        //     }
+        // } else if let Some((_, err, _)) = self.special_case_trappable_error(&func.results) {
+        //     let err = &self.resolve.types[resolve_type_definition_id(self.resolve, err)];
+        //     let err_name = err.name.as_ref().unwrap();
+        //     let owner = match err.owner {
+        //         TypeOwner::Interface(i) => i,
+        //         _ => unimplemented!(),
+        //     };
+        //     let convert_trait = match self.path_to_interface(owner) {
+        //         Some(path) => format!("{path}::Host"),
+        //         None => String::from("Host"),
+        //     };
+        //     let convert = format!("{}::convert_{}", convert_trait, err_name.to_snake_case());
+        //     uwrite!(
+        //         self.src,
+        //         "Ok((match r {{
+        //             Ok(a) => Ok(a),
+        //             Err(e) => Err({convert}(host, e)?),
+        //         }},))"
+        //     );
+        // } else if func.results.iter_types().len() == 1 {
+        //     uwrite!(self.src, "Ok((r?,))\n");
+        // } else {
+        //     uwrite!(self.src, "r\n");
+        // }
 
+        self.src.push_str("todo!()\n");
         self.src.push_str("}");
     }
 
