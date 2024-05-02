@@ -114,5 +114,11 @@ impl test::guest::bar::Host for Host {
 pub struct MyResource(pub i32);
 
 impl test::guest::bar::HostHostResource for MyResource {
-    
+    fn new(a: i32) -> Self {
+        Self(a)
+    }
+
+    fn print_a(self_: &'_ Self) {
+        println!("Host: {}", self_.0);
+    }
 }

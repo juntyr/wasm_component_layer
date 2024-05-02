@@ -27,9 +27,9 @@ pub trait RustGenerator<'a> {
     /// inside function signatures.
     fn ownership(&self) -> Ownership;
 
-    fn print_ty(&mut self, ty: &Type, mode: TypeMode) {
+    fn print_ty(&mut self, ty: &Type, mode: TypeMode, resource: Option<TypeId>) {
         match ty {
-            Type::Id(t) => self.print_tyid(*t, mode),
+            Type::Id(t) => self.print_tyid(*t, mode, resource),
             Type::Bool => self.push_str("bool"),
             Type::U8 => self.push_str("u8"),
             Type::U16 => self.push_str("u16"),
@@ -56,14 +56,14 @@ pub trait RustGenerator<'a> {
         }
     }
 
-    fn print_optional_ty(&mut self, ty: Option<&Type>, mode: TypeMode) {
+    fn print_optional_ty(&mut self, ty: Option<&Type>, mode: TypeMode, resource: Option<TypeId>) {
         match ty {
-            Some(ty) => self.print_ty(ty, mode),
+            Some(ty) => self.print_ty(ty, mode, resource),
             None => self.push_str("()"),
         }
     }
 
-    fn print_tyid(&mut self, id: TypeId, mode: TypeMode) {
+    fn print_tyid(&mut self, id: TypeId, mode: TypeMode, resource: Option<TypeId>) {
         let info = self.info(id);
         let lt = self.lifetime_for(&info, mode);
         let ty = &self.resolve().types[id];
@@ -123,19 +123,19 @@ pub trait RustGenerator<'a> {
         }
 
         match &ty.kind {
-            TypeDefKind::List(t) => self.print_list(t, mode),
+            TypeDefKind::List(t) => self.print_list(t, mode, resource),
 
             TypeDefKind::Option(t) => {
                 self.push_str("Option<");
-                self.print_ty(t, mode);
+                self.print_ty(t, mode, resource);
                 self.push_str(">");
             }
 
             TypeDefKind::Result(r) => {
                 self.push_str("Result<");
-                self.print_optional_ty(r.ok.as_ref(), mode);
+                self.print_optional_ty(r.ok.as_ref(), mode, resource);
                 self.push_str(",");
-                self.print_optional_ty(r.err.as_ref(), mode);
+                self.print_optional_ty(r.err.as_ref(), mode, resource);
                 self.push_str(">");
             }
 
@@ -147,7 +147,7 @@ pub trait RustGenerator<'a> {
             TypeDefKind::Tuple(t) => {
                 self.push_str("(");
                 for ty in t.types.iter() {
-                    self.print_ty(ty, mode);
+                    self.print_ty(ty, mode, resource);
                     self.push_str(",");
                 }
                 self.push_str(")");
@@ -163,23 +163,23 @@ pub trait RustGenerator<'a> {
             }
             TypeDefKind::Future(ty) => {
                 self.push_str("Future<");
-                self.print_optional_ty(ty.as_ref(), mode);
+                self.print_optional_ty(ty.as_ref(), mode, resource);
                 self.push_str(">");
             }
             TypeDefKind::Stream(stream) => {
                 self.push_str("Stream<");
-                self.print_optional_ty(stream.element.as_ref(), mode);
+                self.print_optional_ty(stream.element.as_ref(), mode, resource);
                 self.push_str(",");
-                self.print_optional_ty(stream.end.as_ref(), mode);
+                self.print_optional_ty(stream.end.as_ref(), mode, resource);
                 self.push_str(">");
             }
 
             TypeDefKind::Handle(handle) => {
-                self.print_handle(handle);
+                self.print_handle(handle, resource);
             }
             TypeDefKind::Resource => unreachable!(),
 
-            TypeDefKind::Type(t) => self.print_ty(t, mode),
+            TypeDefKind::Type(t) => self.print_ty(t, mode, resource),
             TypeDefKind::Unknown => unreachable!(),
         }
     }
@@ -194,7 +194,7 @@ pub trait RustGenerator<'a> {
         self.push_str(name);
     }
 
-    fn print_list(&mut self, ty: &Type, mode: TypeMode) {
+    fn print_list(&mut self, ty: &Type, mode: TypeMode, resource: Option<TypeId>) {
         let next_mode = if matches!(self.ownership(), Ownership::Owning) {
             TypeMode::Owned
         } else {
@@ -208,18 +208,18 @@ pub trait RustGenerator<'a> {
                     self.push_str(" ");
                 }
                 self.push_str("[");
-                self.print_ty(ty, next_mode);
+                self.print_ty(ty, next_mode, resource);
                 self.push_str("]");
             }
             TypeMode::Owned => {
                 self.push_str("Vec<");
-                self.print_ty(ty, next_mode);
+                self.print_ty(ty, next_mode, resource);
                 self.push_str(">");
             }
         }
     }
 
-    fn print_handle(&mut self, handle: &Handle) {
+    fn print_handle(&mut self, handle: &Handle, in_resource: Option<TypeId>) {
         // Handles are either printed as `ResourceAny` for any guest-defined
         // resource or `Resource<T>` for all host-defined resources. This means
         // that this function needs to determine if `handle` points to a host
@@ -243,10 +243,17 @@ pub trait RustGenerator<'a> {
             _ => true,
         };
         if is_host_defined {
-            self.print_type_name_in_interface(
-                ty.owner,
-                &ty.name.as_ref().unwrap().to_upper_camel_case(),
-            );
+            if matches!(handle, Handle::Borrow(_)) {
+                self.push_str("&'_ ");
+            }
+            if matches!(in_resource, Some(resource) if resource == def_id) {
+                self.push_str("Self");
+            } else {
+                self.print_type_name_in_interface(
+                    ty.owner,
+                    &ty.name.as_ref().unwrap().to_upper_camel_case(),
+                );
+            }
         } else {
             self.push_str("wasmtime::component::ResourceAny");
         }

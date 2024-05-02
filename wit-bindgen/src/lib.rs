@@ -373,12 +373,12 @@ impl Bindgen {
                         func_field_name(resolve, func)
                     );
                     for (_, ty) in func.params.iter() {
-                        gen.print_ty(ty, TypeMode::Owned);
+                        gen.print_ty(ty, TypeMode::Owned, None);
                         gen.push_str(", ");
                     }
                     gen.src.push_str("), (");
                     for ty in func.results.iter_types() {
-                        gen.print_ty(ty, TypeMode::Owned);
+                        gen.print_ty(ty, TypeMode::Owned, None);
                         gen.push_str(", ");
                     }
                     gen.src.push_str(")>,");
@@ -1055,7 +1055,7 @@ impl<'a> InterfaceGenerator<'a> {
             TypeDefKind::Future(_) => todo!("generate for future"),
             TypeDefKind::Stream(_) => todo!("generate for stream"),
             TypeDefKind::Handle(handle) => self.type_handle(id, name, handle, &ty.docs),
-            TypeDefKind::Resource => self.type_resource(id, name, ty, &ty.docs),
+            TypeDefKind::Resource => self.type_resource(id, name, interface_name, ty, &ty.docs),
             TypeDefKind::Unknown => unreachable!(),
         }
     }
@@ -1064,11 +1064,11 @@ impl<'a> InterfaceGenerator<'a> {
         self.rustdoc(docs);
         let name = name.to_upper_camel_case();
         uwriteln!(self.src, "pub type {name} = ");
-        self.print_handle(handle);
+        self.print_handle(handle, None);
         self.push_str(";\n");
     }
 
-    fn type_resource(&mut self, id: TypeId, name: &str, resource: &TypeDef, docs: &Docs) {
+    fn type_resource(&mut self, id: TypeId, name: &str, interface_name: &str, resource: &TypeDef, docs: &Docs) {
         let camel = name.to_upper_camel_case();
 
         if self.types_imported() {
@@ -1094,7 +1094,36 @@ impl<'a> InterfaceGenerator<'a> {
             //     }
             // }
 
-            uwriteln!(self.src, "pub trait Host{camel} {{");
+            uwriteln!(self.src, "struct Host{camel}Token;");
+
+            // TODO: where do we stash the context, a resourcetype must be 'static
+            uwriteln!(self.src, "struct Host{camel}Own<T: Host{camel}, C: wasm_component_layer::AsContextMut> {{
+                own: T,
+                ctx: Option<C>,  
+            }}");
+            uwriteln!(self.src, "impl<T: Host{camel}, C: wasm_component_layer::AsContextMut> wasm_component_layer::ComponentType for Host{camel}Own<T, C> {{
+                fn ty() -> wasm_component_layer::ValueType {{
+                    wasm_component_layer::ValueType::Own(T::get_resource_ty().clone())
+                }}
+
+                fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {{
+                    let own = match value {{
+                        wasm_component_layer::Value::Own(own) => own,
+                        _ => anyhow::bail!(\"incorrect type, expected resource own\"),
+                    }};
+                    anyhow::ensure!(&own.ty() == T::get_resource_ty(), \"incorrect resource own type\");
+                    let own = own.take()?;
+                    Ok(Self {{ own, ctx: None }})
+                }}
+
+                fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {{
+                    let ctx = self.ctx.expect(\"resource own without context\");
+                    let own = wasm_component_layer::ResourceOwn::new(ctx, self.own, T::get_resource_ty().clone())?;
+                    Ok(wasm_component_layer::Value::Own(own))
+                }}
+            }}");
+
+            uwriteln!(self.src, "pub trait Host{camel}: 'static + Send + Sync + Sized {{");
 
             let functions = match resource.owner {
                 TypeOwner::World(id) => self.resolve.worlds[id]
@@ -1123,13 +1152,22 @@ impl<'a> InterfaceGenerator<'a> {
                     _ => continue,
                 }
 
-                // self.generate_function_trait_sig(func, Some(id));
+                self.generate_function_trait_sig(func, Some(id));
             }
 
-            // uwrite!(
-            //     self.src,
-            //     "fn drop(&mut self, rep: wasmtime::component::Resource<{camel}>) -> anyhow::Result<()>;"
-            // );
+            uwrite!(
+                self.src,
+                "fn get_resource_ty(_token: Host{camel}Token) -> &'static wasm_component_layer::ResourceType {{
+                    static RESOURCE_TY: std::sync::OnceLock<wasm_component_layer::ResourceType> = std::sync::OnceLock::new();
+                    RESOURCE_TY.get_or_init(|| {{
+                        wasm_component_layer::ResourceType::new::<Self>(Some(
+                            wasm_component_layer::TypeIdentifier::new(\"{name}\", Some(
+                                \"{interface_name}\".try_into().unwrap()
+                            ))
+                        ))
+                    }})
+                }}"
+            );
 
             uwriteln!(self.src, "}}");
         } else {
@@ -1194,7 +1232,7 @@ impl<'a> InterfaceGenerator<'a> {
             self.push_str("pub ");
             self.push_str(&to_rust_ident(&field.name));
             self.push_str(": ");
-            self.print_ty(&field.ty, TypeMode::Owned);
+            self.print_ty(&field.ty, TypeMode::Owned, None);
             self.push_str(",\n");
         }
         self.push_str("}\n");
@@ -1232,7 +1270,7 @@ impl<'a> InterfaceGenerator<'a> {
             self.src.push_str("(std::sync::Arc::clone(Self::get_");
             self.src.push_str(&field.name.to_snake_case());
             self.src.push_str("_field_name()), <");
-            self.print_ty(&field.ty, TypeMode::Owned);
+            self.print_ty(&field.ty, TypeMode::Owned, None);
             self.src
                 .push_str(" as wasm_component_layer::ComponentType>::ty()),\n");
         }
@@ -1266,7 +1304,7 @@ impl<'a> InterfaceGenerator<'a> {
         for field in record.fields.iter() {
             self.src.push_str(&to_rust_ident(&field.name));
             self.src.push_str(": <");
-            self.print_ty(&field.ty, TypeMode::Owned);
+            self.print_ty(&field.ty, TypeMode::Owned, None);
             self.src
                 .push_str(" as wasm_component_layer::ComponentType>::from_value(&record.field(\"");
             self.src.push_str(&field.name);
@@ -1284,7 +1322,7 @@ impl<'a> InterfaceGenerator<'a> {
             self.src.push_str("(std::sync::Arc::clone(Self::get_");
             self.src.push_str(&field.name.to_snake_case());
             self.src.push_str("_field_name()), <");
-            self.print_ty(&field.ty, TypeMode::Owned);
+            self.print_ty(&field.ty, TypeMode::Owned, None);
             self.src
                 .push_str(" as wasm_component_layer::ComponentType>::into_value(self.");
             self.src.push_str(&to_rust_ident(&field.name));
@@ -1335,7 +1373,7 @@ impl<'a> InterfaceGenerator<'a> {
             self.print_generics(lt);
             self.push_str(" = (");
             for ty in tuple.types.iter() {
-                self.print_ty(ty, mode);
+                self.print_ty(ty, mode, None);
                 self.push_str(",");
             }
             self.push_str(");\n");
@@ -1476,7 +1514,7 @@ impl<'a> InterfaceGenerator<'a> {
             self.push_str(&case.name.to_upper_camel_case());
             if let Some(ty) = &case.ty {
                 self.push_str("(");
-                self.print_ty(ty, TypeMode::Owned);
+                self.print_ty(ty, TypeMode::Owned, None);
                 self.push_str(")")
             }
             self.push_str(",\n");
@@ -1509,7 +1547,7 @@ impl<'a> InterfaceGenerator<'a> {
                 None => self.src.push_str("None"),
                 Some(ty) => {
                     self.src.push_str("Some(<");
-                    self.print_ty(ty, TypeMode::Owned);
+                    self.print_ty(ty, TypeMode::Owned, None);
                     self.src
                         .push_str(" as wasm_component_layer::ComponentType>::ty())");
                 }
@@ -1636,7 +1674,7 @@ impl<'a> InterfaceGenerator<'a> {
             self.push_str(&format!("pub type {}", name));
             self.print_generics(lt);
             self.push_str("= Option<");
-            self.print_ty(payload, mode);
+            self.print_ty(payload, mode, None);
             self.push_str(">;\n");
         }
     }
@@ -1650,9 +1688,9 @@ impl<'a> InterfaceGenerator<'a> {
             self.push_str(&format!("pub type {}", name));
             self.print_generics(lt);
             self.push_str("= Result<");
-            self.print_optional_ty(result.ok.as_ref(), mode);
+            self.print_optional_ty(result.ok.as_ref(), mode, None);
             self.push_str(",");
-            self.print_optional_ty(result.err.as_ref(), mode);
+            self.print_optional_ty(result.err.as_ref(), mode, None);
             self.push_str(">;\n");
         }
     }
@@ -1867,7 +1905,7 @@ impl<'a> InterfaceGenerator<'a> {
             let lt = self.lifetime_for(&info, mode);
             self.print_generics(lt);
             self.push_str(" = ");
-            self.print_ty(ty, mode);
+            self.print_ty(ty, mode, None);
             self.push_str(";\n");
         }
     }
@@ -1880,28 +1918,28 @@ impl<'a> InterfaceGenerator<'a> {
             self.push_str(&format!("pub type {}", name));
             self.print_generics(lt);
             self.push_str(" = ");
-            self.print_list(ty, mode);
+            self.print_list(ty, mode, None);
             self.push_str(";\n");
         }
     }
 
-    fn print_result_ty(&mut self, results: &Results, mode: TypeMode) {
+    fn print_result_ty(&mut self, results: &Results, mode: TypeMode, resource: Option<TypeId>) {
         match results {
             Results::Named(rs) => match rs.len() {
                 0 => self.push_str("()"),
-                1 => self.print_ty(&rs[0].1, mode),
+                1 => self.print_ty(&rs[0].1, mode, resource),
                 _ => {
                     self.push_str("(");
                     for (i, (_, ty)) in rs.iter().enumerate() {
                         if i > 0 {
                             self.push_str(", ")
                         }
-                        self.print_ty(ty, mode)
+                        self.print_ty(ty, mode, resource)
                     }
                     self.push_str(")");
                 }
             },
-            Results::Anon(ty) => self.print_ty(ty, mode),
+            Results::Anon(ty) => self.print_ty(ty, mode, resource),
         }
     }
 
@@ -1945,7 +1983,7 @@ impl<'a> InterfaceGenerator<'a> {
         // for this interface defined by `type_resource`.
         uwrite!(self.src, "pub trait Host {{");
         for resource in get_resources(self.resolve, id) {
-            uwrite!(self.src, "type {}: 'static + Send + Sync + Host{};\n", resource.to_upper_camel_case(), resource.to_upper_camel_case());
+            uwrite!(self.src, "type {}: Host{};\n", resource.to_upper_camel_case(), resource.to_upper_camel_case());
         }
         for (_, func) in iface.functions.iter() {
             match func.kind {
@@ -2023,23 +2061,11 @@ impl<'a> InterfaceGenerator<'a> {
             let snake = name.to_snake_case();
             let camel = name.to_upper_camel_case();
             
-            // TODO: move the resource type definition into a newly generated type we control
-            //       or maybe we can even put it into the host resource trait by adding a
-            //       trait method with a default impl that cannot be implemented or called
-            //       without a private token type that only we have
-            uwriteln!(
-                self.src,
-                "let {snake}_ty = wasm_component_layer::ResourceType::new::<U::{camel}>(Some(
-                    wasm_component_layer::TypeIdentifier::new(\"{name}\", Some(
-                        \"{interface_name}\".try_into().unwrap()
-                    ))
-                ));"
-            );
             uwriteln!(
                 self.src,
                 "inst.define_resource(
                     \"{name}\",
-                    {snake}_ty,
+                    U::{camel}::get_resource_ty(Host{camel}Token).clone(),
                 )?;"
             )
         }
@@ -2190,19 +2216,22 @@ impl<'a> InterfaceGenerator<'a> {
 
         self.push_str("fn ");
         self.push_str(&rust_function_name(func));
-        self.push_str("(&mut self, ");
+        self.push_str("(");
+        if resource.is_none() {
+            self.push_str("&mut self, ");
+        }
         for (name, param) in func.params.iter() {
             let name = to_rust_ident(name);
             self.push_str(&name);
             self.push_str(": ");
-            self.print_ty(param, TypeMode::Owned/*, resource*/);
+            self.print_ty(param, TypeMode::Owned, resource);
             self.push_str(",");
         }
         self.push_str(")");
         self.push_str(" -> ");
 
         if !self.gen.opts.trappable_imports.can_trap(func) {
-            self.print_result_ty(&func.results, TypeMode::Owned/*, resource*/);
+            self.print_result_ty(&func.results, TypeMode::Owned, resource);
         } else if let Some((r, _id, error_typename)) =
             self.special_case_trappable_error(&func.results)
         {
@@ -2211,7 +2240,7 @@ impl<'a> InterfaceGenerator<'a> {
             // for them to trap or use `?` to propogate their errors
             self.push_str("Result<");
             if let Some(ok) = r.ok {
-                self.print_ty(&ok, TypeMode::Owned/*, resource*/);
+                self.print_ty(&ok, TypeMode::Owned, resource);
             } else {
                 self.push_str("()");
             }
@@ -2222,7 +2251,7 @@ impl<'a> InterfaceGenerator<'a> {
             // All other functions get their return values wrapped in an anyhow::Result.
             // Returning the anyhow::Error case can be used to trap.
             self.push_str("anyhow::Result<");
-            self.print_result_ty(&func.results, TypeMode::Owned/*, resource*/);
+            self.print_result_ty(&func.results, TypeMode::Owned, resource);
             self.push_str(">");
         }
 
@@ -2274,12 +2303,12 @@ impl<'a> InterfaceGenerator<'a> {
 
         for (i, param) in func.params.iter().enumerate() {
             uwrite!(self.src, "arg{}: ", i);
-            self.print_ty(&param.1, TypeMode::Owned);
+            self.print_ty(&param.1, TypeMode::Owned, None);
             self.push_str(",");
         }
 
         self.src.push_str(") -> anyhow::Result<");
-        self.print_result_ty(&func.results, TypeMode::Owned);
+        self.print_result_ty(&func.results, TypeMode::Owned, None);
 
         self.src.push_str("> {\n");
 
