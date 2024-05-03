@@ -1094,41 +1094,7 @@ impl<'a> InterfaceGenerator<'a> {
             //     }
             // }
 
-            uwriteln!(self.src, "struct Host{camel}Token;");
-
-            uwriteln!(self.src, "struct Host{camel}Own<T: Host{camel}> {{
-                own: wasm_component_layer::ResourceOwn,
-                _marker: core::marker::PhantomData<T>,
-            }}");
-            uwriteln!(self.src, "impl<T: Host{camel}> Host{camel}Own<T> {{
-                fn new(value: T, ctx: impl wasm_component_layer::AsContextMut) -> anyhow::Result<Self> {{
-                    let own = wasm_component_layer::ResourceOwn::new(ctx, value, T::get_resource_ty(Host{camel}Token).clone())?;
-                    Ok(Self {{ own, _marker: core::marker::PhantomData::<T> }})
-                }}
-
-                fn take(self, ctx: impl wasm_component_layer::AsContextMut) -> anyhow::Result<T> {{
-                    self.own.take(ctx)
-                }}
-            }}");
-            uwriteln!(self.src, "impl<T: Host{camel}> wasm_component_layer::ComponentType for Host{camel}Own<T> {{
-                fn ty() -> wasm_component_layer::ValueType {{
-                    wasm_component_layer::ValueType::Own(T::get_resource_ty(Host{camel}Token).clone())
-                }}
-
-                fn from_value(value: &wasm_component_layer::Value) -> anyhow::Result<Self> {{
-                    let own = match value {{
-                        wasm_component_layer::Value::Own(own) => own,
-                        _ => anyhow::bail!(\"incorrect type, expected resource own\"),
-                    }};
-                    anyhow::ensure!(&own.ty() == T::get_resource_ty(Host{camel}Token), \"incorrect resource own type\");
-                    Ok(Self {{ own: own.clone(), _marker: core::marker::PhantomData::<T> }})
-                }}
-
-                fn into_value(self) -> anyhow::Result<wasm_component_layer::Value> {{
-                    Ok(wasm_component_layer::Value::Own(self.own))
-                }}
-            }}");
-
+            self.rustdoc(docs);
             uwriteln!(self.src, "pub trait Host{camel}: 'static + Send + Sync + Sized {{");
 
             let functions = match resource.owner {
@@ -1161,11 +1127,11 @@ impl<'a> InterfaceGenerator<'a> {
                 self.generate_function_trait_sig(func, Some(id));
             }
 
-            uwrite!(
-                self.src,
-                "
-                #[doc(hidden)]
-                fn get_resource_ty(_token: Host{camel}Token) -> &'static wasm_component_layer::ResourceType {{
+            uwriteln!(self.src, "}}");
+
+            // TODO: this impl is ot allowed
+            uwriteln!(self.src, "impl<T: Host{camel}> wasm_component_layer::Resource for T {{
+                fn ty() -> wasm_component_layer::ResourceType {{
                     static RESOURCE_TY: std::sync::OnceLock<wasm_component_layer::ResourceType> = std::sync::OnceLock::new();
                     RESOURCE_TY.get_or_init(|| {{
                         wasm_component_layer::ResourceType::new::<Self>(Some(
@@ -1173,27 +1139,9 @@ impl<'a> InterfaceGenerator<'a> {
                                 \"{interface_name}\".try_into().unwrap()
                             ))
                         ))
-                    }})
+                    }}).clone()
                 }}
-                
-                #[doc(hidden)]
-                fn from_value(value: &wasm_component_layer::Value, ctx: impl wasm_component_layer::AsContextMut, token: Host{camel}Token) -> anyhow::Result<Self> {{
-                    let own = match value {{
-                        wasm_component_layer::Value::Own(own) => own,
-                        _ => anyhow::bail!(\"incorrect type, expected resource own\"),
-                    }};
-                    anyhow::ensure!(&own.ty() == Self::get_resource_ty(token), \"incorrect resource own type\");
-                    own.take(ctx)
-                }}
-                
-                #[doc(hidden)]
-                fn into_value(self, ctx: impl wasm_component_layer::AsContextMut, token: Host{camel}Token) -> anyhow::Result<wasm_component_layer::Value> {{
-                    let own = wasm_component_layer::ResourceOwn::new(ctx, self, Self::get_resource_ty(token).clone())?;
-                    Ok(wasm_component_layer::Value::Own(own))
-                }}"
-            );
-
-            uwriteln!(self.src, "}}");
+            }}");
         } else {
             // self.rustdoc(docs);
             // uwriteln!(
@@ -2079,17 +2027,14 @@ impl<'a> InterfaceGenerator<'a> {
         self.src.push_str("let mut ctx = ctx.as_context_mut();\n");
         uwriteln!(self.src, "let mut inst = linker.define_instance(\"{name}\".try_into().unwrap())?;");
 
-        let interface_name = name;
-
         for name in get_resources(self.resolve, id) {
-            let snake = name.to_snake_case();
             let camel = name.to_upper_camel_case();
             
             uwriteln!(
                 self.src,
                 "inst.define_resource(
                     \"{name}\",
-                    U::{camel}::get_resource_ty(Host{camel}Token).clone(),
+                    <U::{camel}\nas wasm_component_layer::Resource>::ty(),
                 )?;"
             )
         }

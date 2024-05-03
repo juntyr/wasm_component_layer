@@ -858,33 +858,6 @@ impl ResourceOwn {
         }
     }
 
-    /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
-    pub fn rep_mut<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
-        &self,
-        ctx: &'a mut crate::StoreContextMut<S, E>,
-    ) -> Result<&'a mut T> {
-        ensure!(
-            self.store_id == ctx.as_context().inner.data().id,
-            "Incorrect store."
-        );
-        ensure!(
-            self.tracker.load(Ordering::Acquire) < usize::MAX,
-            "Resource was already destroyed."
-        );
-
-        if self.ty.host_destructor().is_some() {
-            ctx.inner
-                .data_mut()
-                .host_resources
-                .get_mut(self.rep as usize)
-                .expect("Resource was not present.")
-                .downcast_mut()
-                .context("Resource was not of requested type.")
-        } else {
-            bail!("Cannot get the representation for a guest-owned resource.");
-        }
-    }
-
     /// Gets the type of this value.
     pub fn ty(&self) -> ResourceType {
         self.ty.clone()
@@ -985,6 +958,90 @@ impl<'a> Deserialize<'a> for ResourceOwn {
     fn deserialize<D: Deserializer<'a>>(_: D) -> Result<Self, D::Error> {
         use serde::de::*;
         std::result::Result::Err(D::Error::custom("Cannot deserialize resources."))
+    }
+}
+
+/// A type which represents a resource.
+pub trait Resource: 'static + Send + Sync + Sized {
+    /// Gets the component model resource type for instances of `Self`.
+    fn ty() -> ResourceType;
+}
+
+/// Represents a strongly typed resource that is owned by the host.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct TypedResourceOwn<T: Resource> {
+    /// The inner dynamically typed resource
+    own: ResourceOwn,
+    _marker: PhantomData<T>,
+}
+
+impl<T: Resource> TypedResourceOwn<T> {
+    /// Creates a new resource for the given value.
+    pub fn new(
+        ctx: impl AsContextMut,
+        value: T,
+    ) -> Result<Self> {
+        Ok(Self {
+            own: ResourceOwn::new(ctx, value, T::ty())?,
+            _marker: PhantomData::<T>,
+        })
+    }
+
+    /// Creates a borrow of this owned resource. The resulting borrow must be
+    /// manually released via [`TypedResourceBorrow::drop`] afterward.
+    pub fn borrow(&self, ctx: impl crate::AsContextMut) -> Result<TypedResourceBorrow<T>> {
+        Ok(TypedResourceBorrow {
+            borrow: self.own.borrow(ctx)?,
+            _marker: PhantomData::<T>,
+        })
+    }
+
+    /// Gets the internal representation of this resource. Fails if the
+    /// resource was already dropped.
+    pub fn rep<'a, S, E: wasm_runtime_layer::backend::WasmEngine>(
+        &self,
+        ctx: &'a crate::StoreContext<S, E>,
+    ) -> Result<&'a T> {
+        self.own.rep(ctx)
+    }
+
+    /// Removes this resource from the context without invoking the destructor,
+    /// and returns the value. Fails if the resource is currently borrowed or
+    /// was already dropped.
+    pub fn take(&self, ctx: impl crate::AsContextMut) -> Result<T> {
+        self.own.take(ctx)
+    }
+
+    /// Drops this resource and invokes the destructor, removing it from the
+    /// context. Fails if the resource is currently borrowed or was already
+    /// destroyed.
+    pub fn drop(&self, ctx: impl crate::AsContextMut) -> Result<()> {
+        self.own.drop(ctx)
+    }
+}
+
+impl<T: Resource> ComponentType for TypedResourceOwn<T> {
+    fn ty() -> ValueType {
+        ValueType::Own(T::ty())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        let own = match value {
+            Value::Own(own) => own,
+            _ => bail!("incorrect type, expected resource own"),
+        };
+        ensure!(own.ty() == T::ty(), "incorrect resource own type");
+
+        Ok(Self {
+            own: own.clone(),
+            _marker: PhantomData::<T>,
+        })
+    }
+
+    fn into_value(self) -> Result<Value> {
+        Ok(Value::Own(self.own))
     }
 }
 
@@ -1105,6 +1162,59 @@ impl<'a> Deserialize<'a> for ResourceBorrow {
     fn deserialize<D: Deserializer<'a>>(_: D) -> Result<Self, D::Error> {
         use serde::de::*;
         std::result::Result::Err(D::Error::custom("Cannot deserialize resources."))
+    }
+}
+
+/// Represents a strongly typed resource that is borrowed by the host. If this
+/// borrow originated from a host-owned resource, then it must be manually
+/// released via [`TypedResourceBorrow::drop`], or the owned resource will be
+/// considered borrowed indefinitely.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct TypedResourceBorrow<T: Resource> {
+    /// The inner dynamically typed resource
+    borrow: ResourceBorrow,
+    _marker: PhantomData<T>,
+}
+
+impl<T: Resource> TypedResourceBorrow<T> {
+    /// Gets the internal representation of this resource. Fails if the
+    /// resource was already dropped.
+    pub fn rep<'a, S, E: wasm_runtime_layer::backend::WasmEngine>(
+        &self,
+        ctx: &'a crate::StoreContext<S, E>,
+    ) -> Result<&'a T> {
+        self.borrow.rep(ctx)
+    }
+
+    /// Drops this borrow. Fails if this was not a manual borrow of a host
+    /// resource.
+    pub fn drop(&self, ctx: impl crate::AsContextMut) -> Result<()> {
+        self.borrow.drop(ctx)
+    }
+}
+
+impl<T: Resource> ComponentType for TypedResourceBorrow<T> {
+    fn ty() -> ValueType {
+        ValueType::Borrow(T::ty())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        let borrow = match value {
+            Value::Borrow(borrow) => borrow,
+            _ => bail!("incorrect type, expected resource borrow"),
+        };
+        ensure!(borrow.ty() == T::ty(), "incorrect resource borrow type");
+
+        Ok(Self {
+            borrow: borrow.clone(),
+            _marker: PhantomData::<T>,
+        })
+    }
+
+    fn into_value(self) -> Result<Value> {
+        Ok(Value::Borrow(self.borrow))
     }
 }
 

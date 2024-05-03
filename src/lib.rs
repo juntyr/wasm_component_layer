@@ -156,7 +156,7 @@ use crate::require_matches::*;
 pub use crate::types::*;
 pub use crate::types::{FuncType, ValueType, VariantCase};
 pub use crate::values::*;
-pub use crate::values::{Enum, Flags, Record, Tuple, Value, Variant};
+pub use crate::values::{Enum, Flags, Record, Tuple, Value, Variant, Resource};
 
 /// A parsed and validated WebAssembly component, which may be used to instantiate [`Instance`]s.
 #[derive(Clone, Debug)]
