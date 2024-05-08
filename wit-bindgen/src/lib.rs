@@ -1,8 +1,7 @@
 use crate::rust::{to_rust_ident, to_rust_upper_camel_case, RustGenerator, TypeMode};
 use crate::types::{TypeInfo, Types};
-use anyhow::{bail, Context};
 use heck::*;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
@@ -49,7 +48,6 @@ struct Bindgen {
     sizes: SizeAlign,
     interface_names: HashMap<InterfaceId, InterfaceName>,
     interface_last_seen_as_import: HashMap<InterfaceId, bool>,
-    trappable_errors: IndexMap<TypeId, String>,
     // Track the with options that were used. Remapped interfaces provided via `with`
     // are required to be used.
     used_with_opts: HashSet<String>,
@@ -94,15 +92,8 @@ pub struct Opts {
     /// Whether or not to emit `tracing` macro calls on function entry/exit.
     pub tracing: bool,
 
-    /// A list of "trappable errors" which are used to replace the `E` in
-    /// `result<T, E>` found in WIT.
-    pub trappable_error_type: Vec<TrappableError>,
-
     /// Whether or not to generate code for only the interfaces of this wit file or not.
     pub only_interfaces: bool,
-
-    /// Configuration of which imports are allowed to generate a trap.
-    pub trappable_imports: TrappableImports,
 
     /// Remapping of interface names to rust module names.
     /// TODO: is there a better type to use for the value of this map?
@@ -113,36 +104,6 @@ pub struct Opts {
     ///
     /// These derive attributes will be added to any generated structs or enums
     pub additional_derive_attributes: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TrappableError {
-    /// Full path to the error, such as `wasi:io/streams/error`.
-    pub wit_path: String,
-
-    /// The name, in Rust, of the error type to generate.
-    pub rust_type_name: String,
-}
-
-#[derive(Default, Debug, Clone)]
-pub enum TrappableImports {
-    /// No imports are allowed to trap.
-    #[default]
-    None,
-    /// All imports may trap.
-    All,
-    /// Only the specified set of functions may trap.
-    Only(HashSet<String>),
-}
-
-impl TrappableImports {
-    fn can_trap(&self, f: &Function) -> bool {
-        match self {
-            TrappableImports::None => false,
-            TrappableImports::All => true,
-            TrappableImports::Only(set) => set.contains(&f.name),
-        }
-    }
 }
 
 impl Opts {
@@ -237,15 +198,6 @@ impl Bindgen {
 
     fn generate(&mut self, resolve: &Resolve, id: WorldId) -> anyhow::Result<String> {
         self.types.analyze(resolve, id);
-        for (i, te) in self.opts.trappable_error_type.iter().enumerate() {
-            let id = resolve_type_in_package(resolve, &te.wit_path)
-                .context(format!("resolving {:?}", te))
-                .unwrap();
-            let name = format!("_TrappableError{i}");
-            uwriteln!(self.src, "type {name} = {};", te.rust_type_name);
-            let prev = self.trappable_errors.insert(id, name);
-            assert!(prev.is_none());
-        }
 
         // Convert all entries in `with` as relative to the root of where the
         // macro itself is invoked. This emits a `pub use` to bring the name
@@ -931,77 +883,6 @@ impl Bindgen {
     }
 }
 
-fn resolve_type_in_package(resolve: &Resolve, wit_path: &str) -> anyhow::Result<TypeId> {
-    // Build a map, `packages_to_omit_version`, where that package can be
-    // uniquely identified by its name/namespace combo and as such version
-    // information is not required.
-    let mut packages_with_same_name = HashMap::new();
-    for (id, pkg) in resolve.packages.iter() {
-        packages_with_same_name
-            .entry(PackageName {
-                version: None,
-                ..pkg.name.clone()
-            })
-            .or_insert(Vec::new())
-            .push(id)
-    }
-    let packages_to_omit_version = packages_with_same_name
-        .iter()
-        .filter_map(
-            |(_name, list)| {
-                if list.len() == 1 {
-                    Some(list)
-                } else {
-                    None
-                }
-            },
-        )
-        .flatten()
-        .collect::<HashSet<_>>();
-
-    let mut found_interface = false;
-
-    // Look for an interface whose assigned prefix starts `wit_path`. Not
-    // exactly the most efficient thing ever but is sufficient for now.
-    for (id, interface) in resolve.interfaces.iter() {
-        found_interface = true;
-
-        let iface_name = match &interface.name {
-            Some(name) => name,
-            None => continue,
-        };
-        let pkgid = interface.package.unwrap();
-        let pkgname = &resolve.packages[pkgid].name;
-        let prefix = if packages_to_omit_version.contains(&pkgid) {
-            let mut name = pkgname.clone();
-            name.version = None;
-            format!("{name}/{iface_name}")
-        } else {
-            resolve.id_of(id).unwrap()
-        };
-        let wit_path = match wit_path.strip_prefix(&prefix) {
-            Some(rest) => rest,
-            None => continue,
-        };
-
-        let wit_path = match wit_path.strip_prefix('/') {
-            Some(rest) => rest,
-            None => continue,
-        };
-
-        match interface.types.get(wit_path).copied() {
-            Some(type_id) => return Ok(type_id),
-            None => continue,
-        }
-    }
-
-    if found_interface {
-        bail!("no types found to match `{wit_path}` in interface");
-    }
-
-    bail!("no package/interface found to match `{wit_path}`")
-}
-
 struct InterfaceGenerator<'a> {
     src: Source,
     gen: &'a mut Bindgen,
@@ -1129,8 +1010,12 @@ impl<'a> InterfaceGenerator<'a> {
 
             uwriteln!(self.src, "}}");
 
+            uwriteln!(self.src, "pub struct Host{camel}Resource<T: Host{camel}>(T);");
+
             // TODO: this impl is ot allowed
-            uwriteln!(self.src, "impl<T: Host{camel}> wasm_component_layer::Resource for T {{
+            uwriteln!(self.src, "impl<T: Host{camel}> wasm_component_layer::Resource for Host{camel}Resource<T> {{
+                type Resource = T;
+
                 fn ty() -> wasm_component_layer::ResourceType {{
                     static RESOURCE_TY: std::sync::OnceLock<wasm_component_layer::ResourceType> = std::sync::OnceLock::new();
                     RESOURCE_TY.get_or_init(|| {{
@@ -1915,37 +1800,6 @@ impl<'a> InterfaceGenerator<'a> {
         }
     }
 
-    fn special_case_trappable_error(
-        &self,
-        results: &Results,
-    ) -> Option<(&'a Result_, TypeId, String)> {
-        // We fillin a special trappable error type in the case when a function has just one
-        // result, which is itself a `result<a, e>`, and the `e` is *not* a primitive
-        // (i.e. defined in std) type, and matches the typename given by the user.
-        let mut i = results.iter_types();
-        let id = match i.next()? {
-            Type::Id(id) => id,
-            _ => return None,
-        };
-        if i.next().is_some() {
-            return None;
-        }
-        let result = match &self.resolve.types[*id].kind {
-            TypeDefKind::Result(r) => r,
-            _ => return None,
-        };
-        let error_typeid = match result.err? {
-            Type::Id(id) => resolve_type_definition_id(self.resolve, id),
-            _ => return None,
-        };
-
-        let name = self.gen.trappable_errors.get(&error_typeid)?;
-
-        let mut path = self.path_to_root();
-        uwrite!(path, "{name}");
-        Some((result, error_typeid, path))
-    }
-
     fn generate_add_to_linker(&mut self, id: InterfaceId, name: &str) {
         let iface = &self.resolve.interfaces[id];
         let owner = TypeOwner::Interface(id);
@@ -1964,54 +1818,7 @@ impl<'a> InterfaceGenerator<'a> {
             }
             self.generate_function_trait_sig(func, None);
         }
-
-        // Generate `convert_*` functions to convert custom trappable errors
-        // into the representation required by Wasmtime's component API.
-        let mut required_conversion_traits = IndexSet::new();
-        let mut errors_converted = IndexSet::new();
-        let my_error_types = iface
-            .types
-            .iter()
-            .filter(|(_, id)| self.gen.trappable_errors.contains_key(*id))
-            .map(|(_, id)| *id);
-        let used_error_types = iface
-            .functions
-            .iter()
-            .filter_map(|(_, func)| self.special_case_trappable_error(&func.results))
-            .map(|(_, id, _)| id);
-        for err in my_error_types.chain(used_error_types).collect::<Vec<_>>() {
-            let custom_name = &self.gen.trappable_errors[&err];
-            let err = &self.resolve.types[resolve_type_definition_id(self.resolve, err)];
-            let err_name = err.name.as_ref().unwrap();
-            let err_snake = err_name.to_snake_case();
-            let err_camel = err_name.to_upper_camel_case();
-            let owner = match err.owner {
-                TypeOwner::Interface(i) => i,
-                _ => unimplemented!(),
-            };
-            match self.path_to_interface(owner) {
-                Some(path) => {
-                    required_conversion_traits.insert(format!("{path}::Host"));
-                }
-                None => {
-                    if errors_converted.insert(err_name) {
-                        let root = self.path_to_root();
-                        uwriteln!(
-                            self.src,
-                            "fn convert_{err_snake}(&mut self, err: {root}{custom_name}) -> anyhow::Result<{err_camel}>;"
-                        );
-                    }
-                }
-            }
-        }
         uwriteln!(self.src, "}}");
-
-        let mut where_clause = String::from("U: Host");
-
-        for t in required_conversion_traits {
-            where_clause.push_str(" + ");
-            where_clause.push_str(&t);
-        }
 
         uwriteln!(
             self.src,
@@ -2020,7 +1827,7 @@ impl<'a> InterfaceGenerator<'a> {
                     mut ctx: impl wasm_component_layer::AsContextMut<UserState = T>,
                     linker: &mut wasm_component_layer::Linker,
                 ) -> anyhow::Result<()>
-                    where {where_clause}
+                    where U: Host
                 {{
             "
         );
@@ -2034,7 +1841,7 @@ impl<'a> InterfaceGenerator<'a> {
                 self.src,
                 "inst.define_resource(
                     \"{name}\",
-                    <U::{camel}\nas wasm_component_layer::Resource>::ty(),
+                    <Host{camel}Resource<U::{camel}> as wasm_component_layer::Resource>::ty(),
                 )?;"
             )
         }
@@ -2056,127 +1863,132 @@ impl<'a> InterfaceGenerator<'a> {
         // Generate the closure that's passed to a `Linker`, the final piece of
         // codegen here.
 
+        let module = match owner {
+            TypeOwner::Interface(id) => self.resolve.interfaces[id]
+                .name
+                .as_deref()
+                .unwrap_or("<no module>"),
+            TypeOwner::World(id) => &self.resolve.worlds[id].name,
+            TypeOwner::None => "<no owner>",
+        };
+
         self.src.push_str("|\n");
         self.src.push_str("mut ctx: wasm_component_layer::StoreContextMut<'_, T, _>,\n");
         self.src.push_str("arguments: &[wasm_component_layer::Value],\n");
         self.src.push_str("results: &mut [wasm_component_layer::Value],\n");
         self.src.push_str("| -> anyhow::Result<()> {\n");
-        // for (i, _param) in func.params.iter().enumerate() {
-        //     uwrite!(self.src, "arg{},", i);
-        // }
-        // self.src.push_str(") : (");
 
-        // for (_, ty) in func.params.iter() {
-        //     // Lift is required to be impled for this type, so we can't use
-        //     // a borrowed type:
-        //     self.print_ty(ty, TypeMode::Owned);
-        //     self.src.push_str(", ");
-        // }
+        self.src.push_str("let (");
+        for (i, (_name, _ty)) in func.params.iter().enumerate() {
+            uwrite!(self.src, "arg{},", i);
+        }
+        self.src.push_str(") = match arguments {\n[");
+        for (i, (_name, _ty)) in func.params.iter().enumerate() {
+            uwrite!(self.src, "arg{},", i);
+        }
+        self.src.push_str("] => (");
+        for (i, (_name, _ty)) in func.params.iter().enumerate() {
+            uwrite!(self.src, "wasm_component_layer::ComponentType::from_value(arg{})?,", i);
+        }
+        self.src.push_str("),\n");
+        uwriteln!(self.src, "_ => anyhow::bail!(\"{module}::{} expected {} argument{} but got {{}}\", arguments.len())", func.name, func.params.len(), if func.params.len() == 1 { "" } else { "s" });
+        self.src.push_str("};\n");
 
-        // if self.gen.opts.tracing {
-        //     uwrite!(
-        //         self.src,
-        //         "
-        //            let span = tracing::span!(
-        //                tracing::Level::TRACE,
-        //                \"wit-bindgen import\",
-        //                module = \"{}\",
-        //                function = \"{}\",
-        //            );
-        //            let _enter = span.enter();
-        //        ",
-        //         match owner {
-        //             TypeOwner::Interface(id) => self.resolve.interfaces[id]
-        //                 .name
-        //                 .as_deref()
-        //                 .unwrap_or("<no module>"),
-        //             TypeOwner::World(id) => &self.resolve.worlds[id].name,
-        //             TypeOwner::None => "<no owner>",
-        //         },
-        //         func.name,
-        //     );
-        //     let mut event_fields = func
-        //         .params
-        //         .iter()
-        //         .enumerate()
-        //         .map(|(i, (name, _ty))| {
-        //             let name = to_rust_ident(name);
-        //             format!("{name} = tracing::field::debug(&arg{i})")
-        //         })
-        //         .collect::<Vec<String>>();
-        //     event_fields.push(String::from("\"call\""));
-        //     uwrite!(
-        //         self.src,
-        //         "tracing::event!(tracing::Level::TRACE, {});\n",
-        //         event_fields.join(", ")
-        //     );
-        // }
+        if self.gen.opts.tracing {
+            uwrite!(
+                self.src,
+                "
+                   let span = tracing::span!(
+                       tracing::Level::TRACE,
+                       \"wit-bindgen import\",
+                       module = \"{module}\",
+                       function = \"{}\",
+                   );
+                   let _enter = span.enter();
+               ",
+                func.name,
+            );
+            let mut event_fields = func
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, (name, _ty))| {
+                    let name = to_rust_ident(name);
+                    format!("{name} = tracing::field::debug(&arg{i})")
+                })
+                .collect::<Vec<String>>();
+            event_fields.push(String::from("\"call\""));
+            uwrite!(
+                self.src,
+                "tracing::event!(tracing::Level::TRACE, {});\n",
+                event_fields.join(", ")
+            );
+        }
 
-        // self.src.push_str("let host = get(caller.data_mut());\n");
-        // let func_name = rust_function_name(func);
-        // let host_trait = match func.kind {
-        //     FunctionKind::Freestanding => match owner {
-        //         TypeOwner::World(id) => format!(
-        //             "{}Imports",
-        //             self.resolve.worlds[id].name.to_upper_camel_case()
-        //         ),
-        //         _ => "Host".to_string(),
-        //     },
-        //     FunctionKind::Method(id) | FunctionKind::Static(id) | FunctionKind::Constructor(id) => {
-        //         let resource = self.resolve.types[id]
-        //             .name
-        //             .as_ref()
-        //             .unwrap()
-        //             .to_upper_camel_case();
-        //         format!("Host{resource}")
-        //     }
-        // };
-        // uwrite!(self.src, "let r = {host_trait}::{func_name}(host, ");
+        let func_name = rust_function_name(func);
+        let host_trait = match func.kind {
+            FunctionKind::Freestanding => match owner {
+                TypeOwner::World(id) => format!(
+                    "{}Imports",
+                    self.resolve.worlds[id].name.to_upper_camel_case()
+                ),
+                _ => "Host".to_string(),
+            },
+            FunctionKind::Method(id) | FunctionKind::Static(id) | FunctionKind::Constructor(id) => {
+                let resource = self.resolve.types[id]
+                    .name
+                    .as_ref()
+                    .unwrap()
+                    .to_upper_camel_case();
+                format!("Host{resource}")
+            }
+        };
+        self.src.push_str("let ");
+        if func.results.iter_types().len() != 1 {
+            self.src.push_str("(");
+            for (i, _ty) in func.results.iter_types().enumerate() {
+                uwrite!(self.src, "res{},", i);
+            }
+            self.src.push_str(")");
+        } else {
+            for (i, _ty) in func.results.iter_types().enumerate() {
+                uwrite!(self.src, "res{}", i);
+            }
+        }
+        uwrite!(self.src, "= {host_trait}::{func_name}(ctx, ");
+        for (i, _) in func.params.iter().enumerate() {
+            uwrite!(self.src, "arg{},", i);
+        }
+        uwrite!(self.src, ")?;\n");
 
-        // for (i, _) in func.params.iter().enumerate() {
-        //     uwrite!(self.src, "arg{},", i);
-        // }
-        // uwrite!(self.src, ");\n");
+        if self.gen.opts.tracing {
+            let event_fields = func
+                .results
+                .iter_types()
+                .enumerate()
+                .map(|(i, _ty)| {
+                    format!("&res{i}")
+                })
+                .collect::<Vec<String>>();
+            uwrite!(
+                self.src,
+                "tracing::event!(tracing::Level::TRACE, result = tracing::field::debug(&({})), \"return\");\n",
+                event_fields.join(", ")
+            );
+        }
 
-        // if self.gen.opts.tracing {
-        //     uwrite!(
-        //         self.src,
-        //         "tracing::event!(tracing::Level::TRACE, result = tracing::field::debug(&r), \"return\");"
-        //     );
-        // }
-
-        // if !self.gen.opts.trappable_imports.can_trap(func) {
-        //     if func.results.iter_types().len() == 1 {
-        //         uwrite!(self.src, "Ok((r,))\n");
-        //     } else {
-        //         uwrite!(self.src, "Ok(r)\n");
-        //     }
-        // } else if let Some((_, err, _)) = self.special_case_trappable_error(&func.results) {
-        //     let err = &self.resolve.types[resolve_type_definition_id(self.resolve, err)];
-        //     let err_name = err.name.as_ref().unwrap();
-        //     let owner = match err.owner {
-        //         TypeOwner::Interface(i) => i,
-        //         _ => unimplemented!(),
-        //     };
-        //     let convert_trait = match self.path_to_interface(owner) {
-        //         Some(path) => format!("{path}::Host"),
-        //         None => String::from("Host"),
-        //     };
-        //     let convert = format!("{}::convert_{}", convert_trait, err_name.to_snake_case());
-        //     uwrite!(
-        //         self.src,
-        //         "Ok((match r {{
-        //             Ok(a) => Ok(a),
-        //             Err(e) => Err({convert}(host, e)?),
-        //         }},))"
-        //     );
-        // } else if func.results.iter_types().len() == 1 {
-        //     uwrite!(self.src, "Ok((r?,))\n");
-        // } else {
-        //     uwrite!(self.src, "r\n");
-        // }
-
-        self.src.push_str("todo!()\n");
+        self.src.push_str(" match results {\n[");
+        for (i, _ty) in func.results.iter_types().enumerate() {
+            uwrite!(self.src, "res{}out,", i);
+        }
+        self.src.push_str("] => {");
+        for (i, _ty) in func.results.iter_types().enumerate() {
+            uwriteln!(self.src, "*res{i}out = wasm_component_layer::ComponentType::into_value(res{i})?;");
+        }
+        self.src.push_str("},\n");
+        uwriteln!(self.src, "_ => anyhow::bail!(\"{module}::{} produces {} result{} but its caller expects {{}}\", results.len())", func.name, func.results.len(), if func.results.len() == 1 { "" } else { "s" });
+        self.src.push_str("};\n");
+        self.src.push_str("Ok(())\n");
         self.src.push_str("}");
     }
 
@@ -2189,6 +2001,7 @@ impl<'a> InterfaceGenerator<'a> {
         if resource.is_none() {
             self.push_str("&mut self, ");
         }
+        self.push_str("ctx: impl wasm_component_layer::AsContextMut,");
         for (name, param) in func.params.iter() {
             let name = to_rust_ident(name);
             self.push_str(&name);
@@ -2199,30 +2012,11 @@ impl<'a> InterfaceGenerator<'a> {
         self.push_str(")");
         self.push_str(" -> ");
 
-        if !self.gen.opts.trappable_imports.can_trap(func) {
-            self.print_result_ty(&func.results, TypeMode::Owned, resource);
-        } else if let Some((r, _id, error_typename)) =
-            self.special_case_trappable_error(&func.results)
-        {
-            // Functions which have a single result `result<ok,err>` get special
-            // cased to use the host_wasmtime_rust::Error<err>, making it possible
-            // for them to trap or use `?` to propogate their errors
-            self.push_str("Result<");
-            if let Some(ok) = r.ok {
-                self.print_ty(&ok, TypeMode::Owned, resource);
-            } else {
-                self.push_str("()");
-            }
-            self.push_str(",");
-            self.push_str(&error_typename);
-            self.push_str(">");
-        } else {
-            // All other functions get their return values wrapped in an anyhow::Result.
-            // Returning the anyhow::Error case can be used to trap.
-            self.push_str("anyhow::Result<");
-            self.print_result_ty(&func.results, TypeMode::Owned, resource);
-            self.push_str(">");
-        }
+        // All functions get their return values wrapped in an anyhow::Result.
+        // Returning the anyhow::Error case can be used to trap.
+        self.push_str("anyhow::Result<");
+        self.print_result_ty(&func.results, TypeMode::Owned, resource);
+        self.push_str(">");
 
         self.push_str(";\n");
     }

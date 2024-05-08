@@ -114,11 +114,12 @@ impl test::guest::bar::Host for Host {
 pub struct MyResource(pub i32);
 
 impl test::guest::bar::HostHostResource for MyResource {
-    fn new(a: i32) -> Self {
-        Self(a)
+    fn new(ctx: impl AsContextMut, a: i32) -> anyhow::Result<TypedResourceOwn<test::guest::bar::HostHostResourceResource<Self>>> {
+        TypedResourceOwn::new(ctx, Self(a))
     }
 
-    fn print_a(self_: &'_ Self) {
-        println!("Host: {}", self_.0);
+    fn print_a(ctx: impl AsContextMut, self_: TypedResourceBorrow<test::guest::bar::HostHostResourceResource<Self>>) -> anyhow::Result<()> {
+        println!("Host: {}", self_.rep(&ctx.as_context())?.0);
+        Ok(())
     }
 }

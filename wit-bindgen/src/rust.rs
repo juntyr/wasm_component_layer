@@ -243,15 +243,16 @@ pub trait RustGenerator<'a> {
             _ => true,
         };
         if is_host_defined {
-            if matches!(handle, Handle::Borrow(_)) {
-                self.push_str("&'_ ");
-            }
+            let camel = ty.name.as_ref().unwrap().to_upper_camel_case();
             if matches!(in_resource, Some(resource) if resource == def_id) {
-                self.push_str("Self");
+                match handle {
+                    Handle::Own(_) => self.push_str(&format!("wasm_component_layer::TypedResourceOwn<Host{camel}Resource<Self>>")),
+                    Handle::Borrow(_) => self.push_str(&format!("wasm_component_layer::TypedResourceBorrow<Host{camel}Resource<Self>>")),
+                }
             } else {
                 self.print_type_name_in_interface(
                     ty.owner,
-                    &ty.name.as_ref().unwrap().to_upper_camel_case(),
+                    &camel,
                 );
             }
         } else {

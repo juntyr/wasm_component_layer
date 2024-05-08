@@ -963,7 +963,10 @@ impl<'a> Deserialize<'a> for ResourceOwn {
 
 /// A type which represents a resource.
 pub trait Resource: 'static + Send + Sync + Sized {
-    /// Gets the component model resource type for instances of `Self`.
+    /// The type which actually represents the resource.
+    type Resource: 'static + Send + Sync + Sized;
+
+    /// Gets the component model resource type for instances of `Self::Resource`.
     fn ty() -> ResourceType;
 }
 
@@ -974,18 +977,19 @@ pub trait Resource: 'static + Send + Sync + Sized {
 pub struct TypedResourceOwn<T: Resource> {
     /// The inner dynamically typed resource
     own: ResourceOwn,
-    _marker: PhantomData<T>,
+    /// A marker for the type of this resource
+    _marker: PhantomData<T::Resource>,
 }
 
 impl<T: Resource> TypedResourceOwn<T> {
     /// Creates a new resource for the given value.
     pub fn new(
         ctx: impl AsContextMut,
-        value: T,
+        value: T::Resource,
     ) -> Result<Self> {
         Ok(Self {
             own: ResourceOwn::new(ctx, value, T::ty())?,
-            _marker: PhantomData::<T>,
+            _marker: PhantomData::<T::Resource>,
         })
     }
 
@@ -994,7 +998,7 @@ impl<T: Resource> TypedResourceOwn<T> {
     pub fn borrow(&self, ctx: impl crate::AsContextMut) -> Result<TypedResourceBorrow<T>> {
         Ok(TypedResourceBorrow {
             borrow: self.own.borrow(ctx)?,
-            _marker: PhantomData::<T>,
+            _marker: PhantomData::<T::Resource>,
         })
     }
 
@@ -1003,14 +1007,14 @@ impl<T: Resource> TypedResourceOwn<T> {
     pub fn rep<'a, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
         ctx: &'a crate::StoreContext<S, E>,
-    ) -> Result<&'a T> {
+    ) -> Result<&'a T::Resource> {
         self.own.rep(ctx)
     }
 
     /// Removes this resource from the context without invoking the destructor,
     /// and returns the value. Fails if the resource is currently borrowed or
     /// was already dropped.
-    pub fn take(&self, ctx: impl crate::AsContextMut) -> Result<T> {
+    pub fn take(&self, ctx: impl crate::AsContextMut) -> Result<T::Resource> {
         self.own.take(ctx)
     }
 
@@ -1036,7 +1040,7 @@ impl<T: Resource> ComponentType for TypedResourceOwn<T> {
 
         Ok(Self {
             own: own.clone(),
-            _marker: PhantomData::<T>,
+            _marker: PhantomData::<T::Resource>,
         })
     }
 
@@ -1175,7 +1179,8 @@ impl<'a> Deserialize<'a> for ResourceBorrow {
 pub struct TypedResourceBorrow<T: Resource> {
     /// The inner dynamically typed resource
     borrow: ResourceBorrow,
-    _marker: PhantomData<T>,
+    /// A marker for the type of this resource
+    _marker: PhantomData<T::Resource>,
 }
 
 impl<T: Resource> TypedResourceBorrow<T> {
@@ -1184,7 +1189,7 @@ impl<T: Resource> TypedResourceBorrow<T> {
     pub fn rep<'a, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
         ctx: &'a crate::StoreContext<S, E>,
-    ) -> Result<&'a T> {
+    ) -> Result<&'a T::Resource> {
         self.borrow.rep(ctx)
     }
 
@@ -1209,7 +1214,7 @@ impl<T: Resource> ComponentType for TypedResourceBorrow<T> {
 
         Ok(Self {
             borrow: borrow.clone(),
-            _marker: PhantomData::<T>,
+            _marker: PhantomData::<T::Resource>,
         })
     }
 

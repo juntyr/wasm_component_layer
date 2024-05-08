@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use syn::parse::{Error, Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
 use syn::{braced, token, Token};
-use wasm_component_layer_wit_bindgen::{Opts, TrappableError, TrappableImports};
+use wasm_component_layer_wit_bindgen::Opts;
 use wit_parser::{PackageId, Resolve, UnresolvedPackage, WorldId};
 
 pub struct Config {
@@ -93,8 +93,6 @@ impl Parse for Config {
                         inline = Some(s.value());
                     }
                     Opt::Tracing(val) => opts.tracing = val,
-                    Opt::TrappableErrorType(val) => opts.trappable_error_type = val,
-                    Opt::TrappableImports(val) => opts.trappable_imports = val,
                     Opt::Interfaces(s) => {
                         if inline.is_some() {
                             return Err(Error::new(s.span(), "cannot specify a second source"));
@@ -187,14 +185,12 @@ mod kw {
     syn::custom_keyword!(inline);
     syn::custom_keyword!(path);
     syn::custom_keyword!(tracing);
-    syn::custom_keyword!(trappable_error_type);
     syn::custom_keyword!(world);
     syn::custom_keyword!(ownership);
     syn::custom_keyword!(interfaces);
     syn::custom_keyword!(with);
     syn::custom_keyword!(except_imports);
     syn::custom_keyword!(only_imports);
-    syn::custom_keyword!(trappable_imports);
     syn::custom_keyword!(additional_derives);
 }
 
@@ -203,10 +199,8 @@ enum Opt {
     Path(syn::LitStr),
     Inline(syn::LitStr),
     Tracing(bool),
-    TrappableErrorType(Vec<TrappableError>),
     Interfaces(syn::LitStr),
     With(HashMap<String, String>),
-    TrappableImports(TrappableImports),
     AdditionalDerives(Vec<syn::Path>),
 }
 
@@ -229,14 +223,6 @@ impl Parse for Opt {
             input.parse::<kw::tracing>()?;
             input.parse::<Token![:]>()?;
             Ok(Opt::Tracing(input.parse::<syn::LitBool>()?.value))
-        } else if l.peek(kw::trappable_error_type) {
-            input.parse::<kw::trappable_error_type>()?;
-            input.parse::<Token![:]>()?;
-            let contents;
-            let _lbrace = braced!(contents in input);
-            let fields: Punctuated<_, Token![,]> =
-                contents.parse_terminated(trappable_error_field_parse, Token![,])?;
-            Ok(Opt::TrappableErrorType(Vec::from_iter(fields)))
         } else if l.peek(kw::interfaces) {
             input.parse::<kw::interfaces>()?;
             input.parse::<Token![:]>()?;
@@ -249,22 +235,6 @@ impl Parse for Opt {
             let fields: Punctuated<(String, String), Token![,]> =
                 contents.parse_terminated(with_field_parse, Token![,])?;
             Ok(Opt::With(HashMap::from_iter(fields)))
-        } else if l.peek(kw::trappable_imports) {
-            input.parse::<kw::trappable_imports>()?;
-            input.parse::<Token![:]>()?;
-            let config = if input.peek(syn::LitBool) {
-                match input.parse::<syn::LitBool>()?.value {
-                    true => TrappableImports::All,
-                    false => TrappableImports::None,
-                }
-            } else {
-                let contents;
-                syn::bracketed!(contents in input);
-                let fields: Punctuated<syn::LitStr, Token![,]> =
-                    contents.parse_terminated(Parse::parse, Token![,])?;
-                TrappableImports::Only(fields.iter().map(|s| s.value()).collect())
-            };
-            Ok(Opt::TrappableImports(config))
         } else if l.peek(kw::additional_derives) {
             input.parse::<kw::additional_derives>()?;
             input.parse::<Token![:]>()?;
@@ -276,16 +246,6 @@ impl Parse for Opt {
             Err(l.error())
         }
     }
-}
-
-fn trappable_error_field_parse(input: ParseStream<'_>) -> Result<TrappableError> {
-    let wit_path = input.parse::<syn::LitStr>()?.value();
-    input.parse::<Token![=>]>()?;
-    let rust_type_name = input.parse::<syn::Path>()?.to_token_stream().to_string();
-    Ok(TrappableError {
-        wit_path,
-        rust_type_name,
-    })
 }
 
 fn with_field_parse(input: ParseStream<'_>) -> Result<(String, String)> {
