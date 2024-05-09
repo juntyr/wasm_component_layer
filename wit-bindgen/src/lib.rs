@@ -2,7 +2,7 @@ use crate::rust::{to_rust_ident, to_rust_upper_camel_case, RustGenerator, TypeMo
 use crate::types::{TypeInfo, Types};
 use heck::*;
 use indexmap::IndexMap;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::mem;
@@ -28,11 +28,6 @@ use source::Source;
 
 #[derive(Clone)]
 enum InterfaceName {
-    /// This interface was remapped using `with` to some other Rust code.
-    Remapped {
-        name_at_root: String,
-        local_path: Vec<String>,
-    },
     /// This interface is generated in the module hierarchy specified.
     Path(Vec<String>),
 }
@@ -48,9 +43,6 @@ struct Bindgen {
     sizes: SizeAlign,
     interface_names: HashMap<InterfaceId, InterfaceName>,
     interface_last_seen_as_import: HashMap<InterfaceId, bool>,
-    // Track the with options that were used. Remapped interfaces provided via `with`
-    // are required to be used.
-    used_with_opts: HashSet<String>,
 }
 
 struct ImportFunction {
@@ -95,10 +87,6 @@ pub struct Opts {
     /// Whether or not to generate code for only the interfaces of this wit file or not.
     pub only_interfaces: bool,
 
-    /// Remapping of interface names to rust module names.
-    /// TODO: is there a better type to use for the value of this map?
-    pub with: HashMap<String, String>,
-
     /// Additional derive attributes to add to generated types. If using in a CLI, this flag can be
     /// specified multiple times to add multiple attributes.
     ///
@@ -139,18 +127,10 @@ impl Bindgen {
                 path.push(to_rust_ident(iface.name.as_ref().unwrap()));
             }
         }
-        let entry = if let Some(name_at_root) = self.lookup_replacement(resolve, name, None) {
-            InterfaceName::Remapped {
-                name_at_root,
-                local_path: path,
-            }
-        } else {
-            InterfaceName::Path(path)
-        };
 
-        let remapped = matches!(entry, InterfaceName::Remapped { .. });
-        self.interface_names.insert(id, entry);
-        remapped
+        self.interface_names.insert(id, InterfaceName::Path(path));
+
+        false
     }
 
     /// If the package `id` is the only package with its namespace/name combo
@@ -198,18 +178,6 @@ impl Bindgen {
 
     fn generate(&mut self, resolve: &Resolve, id: WorldId) -> anyhow::Result<String> {
         self.types.analyze(resolve, id);
-
-        // Convert all entries in `with` as relative to the root of where the
-        // macro itself is invoked. This emits a `pub use` to bring the name
-        // into scope under an "anonymous name" which then replaces the `with`
-        // map entry.
-        let mut with = self.opts.with.iter_mut().collect::<Vec<_>>();
-        with.sort();
-        for (i, (_k, v)) in with.into_iter().enumerate() {
-            let name = format!("__with_name{i}");
-            uwriteln!(self.src, "#[doc(hidden)]\npub use {v} as {name};");
-            *v = name;
-        }
 
         let world = &resolve.worlds[id];
         for (name, import) in world.imports.iter() {
@@ -533,19 +501,6 @@ impl Bindgen {
     }
 
     fn finish(&mut self, resolve: &Resolve, world: WorldId) -> anyhow::Result<String> {
-        let remapping_keys = self.opts.with.keys().cloned().collect::<HashSet<String>>();
-
-        let mut unused_keys = remapping_keys
-            .difference(&self.used_with_opts)
-            .map(|s| s.as_str())
-            .collect::<Vec<&str>>();
-
-        unused_keys.sort();
-
-        if !unused_keys.is_empty() {
-            anyhow::bail!("interfaces were specified in the `with` config option but are not referenced in the target world: {unused_keys:?}");
-        }
-
         if !self.opts.only_interfaces {
             self.build_struct(resolve, world)
         }
@@ -593,7 +548,6 @@ impl Bindgen {
         let mut map = Module::default();
         for (module, name) in modules {
             let path = match name {
-                InterfaceName::Remapped { local_path, .. } => local_path,
                 InterfaceName::Path(path) => path,
             };
             let mut cur = &mut map;
@@ -616,151 +570,6 @@ impl Bindgen {
             }
             for submodule in module.contents {
                 uwriteln!(me, "{submodule}");
-            }
-        }
-    }
-
-    /// Attempts to find the `key`, possibly with the resource projection
-    /// `item`, within the `with` map provided to bindings configuration.
-    fn lookup_replacement(
-        &mut self,
-        resolve: &Resolve,
-        key: &WorldKey,
-        item: Option<&str>,
-    ) -> Option<String> {
-        struct Name<'a> {
-            prefix: Prefix,
-            item: Option<&'a str>,
-        }
-
-        #[derive(Copy, Clone)]
-        enum Prefix {
-            Namespace(PackageId),
-            UnversionedPackage(PackageId),
-            VersionedPackage(PackageId),
-            UnversionedInterface(InterfaceId),
-            VersionedInterface(InterfaceId),
-        }
-
-        let prefix = match key {
-            WorldKey::Interface(id) => Prefix::VersionedInterface(*id),
-
-            // Non-interface-keyed names don't get the lookup logic below,
-            // they're relatively uncommon so only lookup the precise key here.
-            WorldKey::Name(key) => {
-                let to_lookup = match item {
-                    Some(item) => format!("{key}/{item}"),
-                    None => key.to_string(),
-                };
-                let result = self.opts.with.get(&to_lookup).cloned();
-                if result.is_some() {
-                    self.used_with_opts.insert(to_lookup.clone());
-                }
-                return result;
-            }
-        };
-
-        // Here names are iteratively attempted as `key` + `item` is "walked to
-        // its root" and each attempt is consulted in `self.opts.with`. This
-        // loop will start at the leaf, the most specific path, and then walk to
-        // the root, popping items, trying to find a result.
-        //
-        // Each time a name is "popped" the projection from the next path is
-        // pushed onto `projection`. This means that if we actually find a match
-        // then `projection` is a collection of namespaces that results in the
-        // final replacement name.
-        let mut name = Name { prefix, item };
-        let mut projection = Vec::new();
-        loop {
-            let lookup = name.lookup_key(resolve);
-            if let Some(renamed) = self.opts.with.get(&lookup) {
-                projection.push(renamed.clone());
-                projection.reverse();
-                self.used_with_opts.insert(lookup);
-                return Some(projection.join("::"));
-            }
-            if !name.pop(resolve, &mut projection) {
-                return None;
-            }
-        }
-
-        impl<'a> Name<'a> {
-            fn lookup_key(&self, resolve: &Resolve) -> String {
-                let mut s = self.prefix.lookup_key(resolve);
-                if let Some(item) = self.item {
-                    s.push('/');
-                    s.push_str(item);
-                }
-                s
-            }
-
-            fn pop(&mut self, resolve: &'a Resolve, projection: &mut Vec<String>) -> bool {
-                match (self.item, self.prefix) {
-                    // If this is a versioned resource name, try the unversioned
-                    // resource name next.
-                    (Some(_), Prefix::VersionedInterface(id)) => {
-                        self.prefix = Prefix::UnversionedInterface(id);
-                        true
-                    }
-                    // If this is an unversioned resource name then time to
-                    // ignore the resource itself and move on to the next most
-                    // specific item, versioned interface names.
-                    (Some(item), Prefix::UnversionedInterface(id)) => {
-                        self.prefix = Prefix::VersionedInterface(id);
-                        self.item = None;
-                        projection.push(item.to_upper_camel_case());
-                        true
-                    }
-                    (Some(_), _) => unreachable!(),
-                    (None, _) => self.prefix.pop(resolve, projection),
-                }
-            }
-        }
-
-        impl Prefix {
-            fn lookup_key(&self, resolve: &Resolve) -> String {
-                match *self {
-                    Prefix::Namespace(id) => resolve.packages[id].name.namespace.clone(),
-                    Prefix::UnversionedPackage(id) => {
-                        let mut name = resolve.packages[id].name.clone();
-                        name.version = None;
-                        name.to_string()
-                    }
-                    Prefix::VersionedPackage(id) => resolve.packages[id].name.to_string(),
-                    Prefix::UnversionedInterface(id) => {
-                        let id = resolve.id_of(id).unwrap();
-                        match id.find('@') {
-                            Some(i) => id[..i].to_string(),
-                            None => id,
-                        }
-                    }
-                    Prefix::VersionedInterface(id) => resolve.id_of(id).unwrap(),
-                }
-            }
-
-            fn pop(&mut self, resolve: &Resolve, projection: &mut Vec<String>) -> bool {
-                *self = match *self {
-                    // try the unversioned interface next
-                    Prefix::VersionedInterface(id) => Prefix::UnversionedInterface(id),
-                    // try this interface's versioned package next
-                    Prefix::UnversionedInterface(id) => {
-                        let iface = &resolve.interfaces[id];
-                        let name = iface.name.as_ref().unwrap();
-                        projection.push(to_rust_ident(name));
-                        Prefix::VersionedPackage(iface.package.unwrap())
-                    }
-                    // try the unversioned package next
-                    Prefix::VersionedPackage(id) => Prefix::UnversionedPackage(id),
-                    // try this package's namespace next
-                    Prefix::UnversionedPackage(id) => {
-                        let name = &resolve.packages[id].name;
-                        projection.push(to_rust_ident(&name.name));
-                        Prefix::Namespace(id)
-                    }
-                    // nothing left to try any more
-                    Prefix::Namespace(_) => return false,
-                };
-                true
             }
         }
     }
@@ -802,7 +611,6 @@ impl Bindgen {
         let mut interfaces = Vec::new();
         for (_, name) in self.import_interfaces.iter() {
             let path = match name {
-                InterfaceName::Remapped { .. } => unreachable!("imported a remapped module"),
                 InterfaceName::Path(path) => path,
             };
             interfaces.push(path.join("::"));
@@ -2185,7 +1993,6 @@ impl<'a> RustGenerator<'a> for InterfaceGenerator<'a> {
         }
         let mut path_to_root = self.path_to_root();
         match &self.gen.interface_names[&interface] {
-            InterfaceName::Remapped { name_at_root, .. } => path_to_root.push_str(name_at_root),
             InterfaceName::Path(path) => {
                 for (i, name) in path.iter().enumerate() {
                     if i > 0 {
