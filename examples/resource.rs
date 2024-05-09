@@ -26,67 +26,6 @@ pub fn main() {
     // Create an instance of the component using the linker.
     let (instance, _instance) = Guest::instantiate(&mut store, &component, &linker).unwrap();
 
-    // Create a type to represent the host-defined resource.
-    // let resource_ty = ResourceType::new::<MyResource>(None);
-
-    // // Create the resource constructor function.
-    // let resource_ty_clone = resource_ty.clone();
-    // let resource_constructor = Func::new(
-    //     &mut store,
-    //     FuncType::new([ValueType::S32], [ValueType::Own(resource_ty.clone())]),
-    //     move |ctx, args, results| {
-    //         let Value::S32(a) = args[0] else {
-    //             bail!("Incorrect input type.")
-    //         };
-    //         results[0] = Value::Own(ResourceOwn::new(
-    //             ctx,
-    //             MyResource(a),
-    //             resource_ty_clone.clone(),
-    //         )?);
-    //         Ok(())
-    //     },
-    // );
-
-    // // Create the resource print function.
-    // let resource_print = Func::new(
-    //     &mut store,
-    //     FuncType::new([ValueType::Borrow(resource_ty.clone())], []),
-    //     |ctx, args, _| {
-    //         let Value::Borrow(res) = &args[0] else {
-    //             bail!("Incorrect input type.")
-    //         };
-    //         println!(
-    //             "Called print with value {:?}",
-    //             res.rep::<MyResource, _, _>(&ctx.as_context()).unwrap()
-    //         );
-    //         Ok(())
-    //     },
-    // );
-
-    // // Parse the component bytes and load its imports and exports.
-    // let component = Component::new(&engine, WASM).unwrap();
-    // // Create a linker that will be used to resolve the component's imports, if any.
-    // let mut linker = Linker::default();
-
-    // // Create the interface containing the resource.
-    // let resource_interface = linker
-    //     .define_instance("test:guest/bar".try_into().unwrap())
-    //     .unwrap();
-
-    // // Defines the necessary host-side functions for using the resource.
-    // resource_interface
-    //     .define_resource("myresource", resource_ty)
-    //     .unwrap();
-    // resource_interface
-    //     .define_func("[constructor]myresource", resource_constructor)
-    //     .unwrap();
-    // resource_interface
-    //     .define_func("[method]myresource.print-a", resource_print)
-    //     .unwrap();
-
-    // // Create an instance of the component using the linker.
-    // let instance = linker.instantiate(&mut store, &component).unwrap();
-
     // // Get the interface that the interface exports.
     // let interface = instance
     //     .exports()
@@ -114,11 +53,17 @@ impl test::guest::bar::Host for Host {
 pub struct MyResource(pub i32);
 
 impl test::guest::bar::HostHostResource for MyResource {
-    fn new(ctx: impl AsContextMut, a: i32) -> anyhow::Result<TypedResourceOwn<test::guest::bar::HostHostResourceResource<Self>>> {
+    fn new(
+        ctx: impl AsContextMut,
+        a: i32,
+    ) -> anyhow::Result<TypedResourceOwn<test::guest::bar::HostHostResourceResource<Self>>> {
         TypedResourceOwn::new(ctx, Self(a))
     }
 
-    fn print_a(ctx: impl AsContextMut, self_: TypedResourceBorrow<test::guest::bar::HostHostResourceResource<Self>>) -> anyhow::Result<()> {
+    fn print_a(
+        ctx: impl AsContextMut,
+        self_: TypedResourceBorrow<test::guest::bar::HostHostResourceResource<Self>>,
+    ) -> anyhow::Result<()> {
         println!("Host: {}", self_.rep(&ctx.as_context())?.0);
         Ok(())
     }

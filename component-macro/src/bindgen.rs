@@ -1,11 +1,10 @@
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use syn::parse::{Error, Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
-use syn::{braced, token, Token};
+use syn::{token, Token};
 use wasm_component_layer_wit_bindgen::Opts;
 use wit_parser::{PackageId, Resolve, UnresolvedPackage, WorldId};
 
@@ -118,7 +117,6 @@ impl Parse for Config {
 
                         opts.only_interfaces = true;
                     }
-                    Opt::With(val) => opts.with.extend(val),
                     Opt::AdditionalDerives(paths) => {
                         opts.additional_derive_attributes = paths
                             .into_iter()
@@ -186,11 +184,7 @@ mod kw {
     syn::custom_keyword!(path);
     syn::custom_keyword!(tracing);
     syn::custom_keyword!(world);
-    syn::custom_keyword!(ownership);
     syn::custom_keyword!(interfaces);
-    syn::custom_keyword!(with);
-    syn::custom_keyword!(except_imports);
-    syn::custom_keyword!(only_imports);
     syn::custom_keyword!(additional_derives);
 }
 
@@ -200,7 +194,6 @@ enum Opt {
     Inline(syn::LitStr),
     Tracing(bool),
     Interfaces(syn::LitStr),
-    With(HashMap<String, String>),
     AdditionalDerives(Vec<syn::Path>),
 }
 
@@ -227,14 +220,6 @@ impl Parse for Opt {
             input.parse::<kw::interfaces>()?;
             input.parse::<Token![:]>()?;
             Ok(Opt::Interfaces(input.parse::<syn::LitStr>()?))
-        } else if l.peek(kw::with) {
-            input.parse::<kw::with>()?;
-            input.parse::<Token![:]>()?;
-            let contents;
-            let _lbrace = braced!(contents in input);
-            let fields: Punctuated<(String, String), Token![,]> =
-                contents.parse_terminated(with_field_parse, Token![,])?;
-            Ok(Opt::With(HashMap::from_iter(fields)))
         } else if l.peek(kw::additional_derives) {
             input.parse::<kw::additional_derives>()?;
             input.parse::<Token![:]>()?;
@@ -246,47 +231,4 @@ impl Parse for Opt {
             Err(l.error())
         }
     }
-}
-
-fn with_field_parse(input: ParseStream<'_>) -> Result<(String, String)> {
-    let interface = input.parse::<syn::LitStr>()?.value();
-    input.parse::<Token![:]>()?;
-    let start = input.span();
-    let path = input.parse::<syn::Path>()?;
-
-    // It's not possible for the segments of a path to be empty
-    let span = start
-        .join(path.segments.last().unwrap().ident.span())
-        .unwrap_or(start);
-
-    let mut buf = String::new();
-    let append = |buf: &mut String, segment: syn::PathSegment| -> Result<()> {
-        if segment.arguments != syn::PathArguments::None {
-            return Err(Error::new(
-                span,
-                "Module path must not contain angles or parens",
-            ));
-        }
-
-        buf.push_str(&segment.ident.to_string());
-
-        Ok(())
-    };
-
-    if path.leading_colon.is_some() {
-        buf.push_str("::");
-    }
-
-    let mut segments = path.segments.into_iter();
-
-    if let Some(segment) = segments.next() {
-        append(&mut buf, segment)?;
-    }
-
-    for segment in segments {
-        buf.push_str("::");
-        append(&mut buf, segment)?;
-    }
-
-    Ok((interface, buf))
 }

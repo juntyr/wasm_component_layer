@@ -983,10 +983,7 @@ pub struct TypedResourceOwn<T: Resource> {
 
 impl<T: Resource> TypedResourceOwn<T> {
     /// Creates a new resource for the given value.
-    pub fn new(
-        ctx: impl AsContextMut,
-        value: T::Resource,
-    ) -> Result<Self> {
+    pub fn new(ctx: impl AsContextMut, value: T::Resource) -> Result<Self> {
         Ok(Self {
             own: ResourceOwn::new(ctx, value, T::ty())?,
             _marker: PhantomData::<T::Resource>,

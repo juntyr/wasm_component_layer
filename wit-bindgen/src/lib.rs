@@ -839,7 +839,10 @@ impl Bindgen {
         self.src.push_str(",\n{\n");
         self.src.push_str("let mut ctx = ctx.as_context_mut();\n");
         for name in interfaces.iter() {
-            uwriteln!(self.src, "{name}::add_to_linker::<T, U>(&mut ctx, linker)?;");
+            uwriteln!(
+                self.src,
+                "{name}::add_to_linker::<T, U>(&mut ctx, linker)?;"
+            );
         }
         if has_world_trait {
             uwriteln!(self.src, "Self::add_root_to_linker::<T>(linker)?;");
@@ -949,34 +952,22 @@ impl<'a> InterfaceGenerator<'a> {
         self.push_str(";\n");
     }
 
-    fn type_resource(&mut self, id: TypeId, name: &str, interface_name: &str, resource: &TypeDef, docs: &Docs) {
+    fn type_resource(
+        &mut self,
+        id: TypeId,
+        name: &str,
+        interface_name: &str,
+        resource: &TypeDef,
+        docs: &Docs,
+    ) {
         let camel = name.to_upper_camel_case();
 
         if self.types_imported() {
-            // self.rustdoc(docs);
-
-            // let replacement = match self.current_interface {
-            //     Some((_, key, _)) => self.gen.lookup_replacement(self.resolve, key, Some(name)),
-            //     None => {
-            //         self.gen.used_with_opts.insert(name.into());
-            //         self.gen.opts.with.get(name).cloned()
-            //     }
-            // };
-            // match replacement {
-            //     Some(path) => {
-            //         uwriteln!(
-            //             self.src,
-            //             "pub use {}{path} as {camel};",
-            //             self.path_to_root()
-            //         );
-            //     }
-            //     None => {
-            //         uwriteln!(self.src, "pub enum {camel} {{}}");
-            //     }
-            // }
-
             self.rustdoc(docs);
-            uwriteln!(self.src, "pub trait Host{camel}: 'static + Send + Sync + Sized {{");
+            uwriteln!(
+                self.src,
+                "pub trait Host{camel}: 'static + Send + Sync + Sized {{"
+            );
 
             let functions = match resource.owner {
                 TypeOwner::World(id) => self.resolve.worlds[id]
@@ -1010,9 +1001,11 @@ impl<'a> InterfaceGenerator<'a> {
 
             uwriteln!(self.src, "}}");
 
-            uwriteln!(self.src, "pub struct Host{camel}Resource<T: Host{camel}>(T);");
+            uwriteln!(
+                self.src,
+                "pub struct Host{camel}Resource<T: Host{camel}>(T);"
+            );
 
-            // TODO: this impl is ot allowed
             uwriteln!(self.src, "impl<T: Host{camel}> wasm_component_layer::Resource for Host{camel}Resource<T> {{
                 type Resource = T;
 
@@ -1809,7 +1802,12 @@ impl<'a> InterfaceGenerator<'a> {
         // for this interface defined by `type_resource`.
         uwrite!(self.src, "pub trait Host {{");
         for resource in get_resources(self.resolve, id) {
-            uwrite!(self.src, "type {}: Host{};\n", resource.to_upper_camel_case(), resource.to_upper_camel_case());
+            uwrite!(
+                self.src,
+                "type {}: Host{};\n",
+                resource.to_upper_camel_case(),
+                resource.to_upper_camel_case()
+            );
         }
         for (_, func) in iface.functions.iter() {
             match func.kind {
@@ -1832,11 +1830,14 @@ impl<'a> InterfaceGenerator<'a> {
             "
         );
         self.src.push_str("let mut ctx = ctx.as_context_mut();\n");
-        uwriteln!(self.src, "let mut inst = linker.define_instance(\"{name}\".try_into().unwrap())?;");
+        uwriteln!(
+            self.src,
+            "let inst = linker.define_instance(\"{name}\".try_into().unwrap())?;"
+        );
 
         for name in get_resources(self.resolve, id) {
             let camel = name.to_upper_camel_case();
-            
+
             uwriteln!(
                 self.src,
                 "inst.define_resource(
@@ -1854,7 +1855,21 @@ impl<'a> InterfaceGenerator<'a> {
     }
 
     fn generate_add_function_to_linker(&mut self, owner: TypeOwner, func: &Function, linker: &str) {
-        uwrite!(self.src, "{linker}.define_func(\"{}\", wasm_component_layer::Func::new(&mut ctx, todo!(), ", func.name);
+        uwrite!(self.src, "{linker}.define_func(\"{}\", wasm_component_layer::Func::new(&mut ctx, wasm_component_layer::FuncType::new([", func.name);
+        for (_name, ty) in func.params.iter() {
+            self.src.push_str("<");
+            self.print_ty(ty, TypeMode::Owned, None);
+            self.src
+                .push_str(" as wasm_component_layer::ComponentType>::ty(),");
+        }
+        self.src.push_str("], [");
+        for ty in func.results.iter_types() {
+            self.src.push_str("<");
+            self.print_ty(ty, TypeMode::Owned, None);
+            self.src
+                .push_str(" as wasm_component_layer::ComponentType>::ty(),");
+        }
+        self.src.push_str("]), ");
         self.generate_guest_import_closure(owner, func);
         uwriteln!(self.src, "))?;")
     }
@@ -1873,9 +1888,12 @@ impl<'a> InterfaceGenerator<'a> {
         };
 
         self.src.push_str("|\n");
-        self.src.push_str("mut ctx: wasm_component_layer::StoreContextMut<'_, T, _>,\n");
-        self.src.push_str("arguments: &[wasm_component_layer::Value],\n");
-        self.src.push_str("results: &mut [wasm_component_layer::Value],\n");
+        self.src
+            .push_str("ctx: wasm_component_layer::StoreContextMut<'_, T, _>,\n");
+        self.src
+            .push_str("arguments: &[wasm_component_layer::Value],\n");
+        self.src
+            .push_str("results: &mut [wasm_component_layer::Value],\n");
         self.src.push_str("| -> anyhow::Result<()> {\n");
 
         self.src.push_str("let (");
@@ -1888,7 +1906,11 @@ impl<'a> InterfaceGenerator<'a> {
         }
         self.src.push_str("] => (");
         for (i, (_name, _ty)) in func.params.iter().enumerate() {
-            uwrite!(self.src, "wasm_component_layer::ComponentType::from_value(arg{})?,", i);
+            uwrite!(
+                self.src,
+                "wasm_component_layer::ComponentType::from_value(arg{})?,",
+                i
+            );
         }
         self.src.push_str("),\n");
         uwriteln!(self.src, "_ => anyhow::bail!(\"{module}::{} expected {} argument{} but got {{}}\", arguments.len())", func.name, func.params.len(), if func.params.len() == 1 { "" } else { "s" });
@@ -1940,7 +1962,7 @@ impl<'a> InterfaceGenerator<'a> {
                     .as_ref()
                     .unwrap()
                     .to_upper_camel_case();
-                format!("Host{resource}")
+                format!("U::{resource}")
             }
         };
         self.src.push_str("let ");
@@ -1966,9 +1988,7 @@ impl<'a> InterfaceGenerator<'a> {
                 .results
                 .iter_types()
                 .enumerate()
-                .map(|(i, _ty)| {
-                    format!("&res{i}")
-                })
+                .map(|(i, _ty)| format!("&res{i}"))
                 .collect::<Vec<String>>();
             uwrite!(
                 self.src,
@@ -1983,7 +2003,10 @@ impl<'a> InterfaceGenerator<'a> {
         }
         self.src.push_str("] => {");
         for (i, _ty) in func.results.iter_types().enumerate() {
-            uwriteln!(self.src, "*res{i}out = wasm_component_layer::ComponentType::into_value(res{i})?;");
+            uwriteln!(
+                self.src,
+                "*res{i}out = wasm_component_layer::ComponentType::into_value(res{i})?;"
+            );
         }
         self.src.push_str("},\n");
         uwriteln!(self.src, "_ => anyhow::bail!(\"{module}::{} produces {} result{} but its caller expects {{}}\", results.len())", func.name, func.results.len(), if func.results.len() == 1 { "" } else { "s" });
@@ -2030,20 +2053,6 @@ impl<'a> InterfaceGenerator<'a> {
             .push_str("\").ok_or_else(|| anyhow::anyhow!(\"exported function `");
         self.src.push_str(&func.name);
         self.src.push_str("` not present\"))?.typed()?");
-
-        // uwrite!(self.src, "*__exports.typed_func::<(");
-        // for (_, ty) in func.params.iter() {
-        //     self.print_ty(ty, TypeMode::AllBorrowed("'_"));
-        //     self.push_str(", ");
-        // }
-        // self.src.push_str("), (");
-        // for ty in func.results.iter_types() {
-        //     self.print_ty(ty, TypeMode::Owned);
-        //     self.push_str(", ");
-        // }
-        // self.src.push_str(")>(\"");
-        // self.src.push_str(&func.name);
-        // self.src.push_str("\")?.func()");
 
         let ret = (snake, mem::take(&mut self.src).to_string());
         self.src = prev;

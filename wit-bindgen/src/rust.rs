@@ -244,17 +244,21 @@ pub trait RustGenerator<'a> {
         };
         if is_host_defined {
             let camel = ty.name.as_ref().unwrap().to_upper_camel_case();
-            if matches!(in_resource, Some(resource) if resource == def_id) {
-                match handle {
-                    Handle::Own(_) => self.push_str(&format!("wasm_component_layer::TypedResourceOwn<Host{camel}Resource<Self>>")),
-                    Handle::Borrow(_) => self.push_str(&format!("wasm_component_layer::TypedResourceBorrow<Host{camel}Resource<Self>>")),
-                }
-            } else {
-                self.print_type_name_in_interface(
-                    ty.owner,
-                    &camel,
-                );
+            match handle {
+                Handle::Own(_) => self.push_str(&format!(
+                    "wasm_component_layer::TypedResourceOwn<Host{camel}Resource<"
+                )),
+                Handle::Borrow(_) => self.push_str(&format!(
+                    "wasm_component_layer::TypedResourceBorrow<Host{camel}Resource<"
+                )),
             }
+            if matches!(in_resource, Some(resource) if resource == def_id) {
+                self.push_str("Self");
+            } else {
+                self.push_str("U::");
+                self.push_str(&camel);
+            }
+            self.push_str(">>");
         } else {
             self.push_str("wasmtime::component::ResourceAny");
         }
