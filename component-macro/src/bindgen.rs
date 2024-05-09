@@ -34,14 +34,6 @@ pub fn expand(input: &Config) -> Result<TokenStream> {
 
         std::fs::write(&path, &src).unwrap();
 
-        // optimistically format the code but don't require success
-        drop(
-            std::process::Command::new("rustfmt")
-                .arg(&path)
-                .arg("--edition=2021")
-                .output(),
-        );
-
         src = format!("include!({path:?});");
     }
     let mut contents = src.parse::<TokenStream>().unwrap();

@@ -12,3 +12,5 @@ anyhow = { version = "1.0", default-features = false }
 heck = { version = "0.4", default-features = false }
 wit-parser = { version = "0.200", default-features = false }
 indexmap = { version = "2.0", default-features = false }
+syn = { version = "2.0", default-features = false, features = ["full"] }
+prettyplease = { version = "0.2", default-features = false }

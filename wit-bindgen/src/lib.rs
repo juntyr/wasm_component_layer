@@ -4,9 +4,7 @@ use heck::*;
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
-use std::io::{Read, Write};
 use std::mem;
-use std::process::{Command, Stdio};
 use wit_parser::*;
 
 macro_rules! uwrite {
@@ -78,9 +76,6 @@ pub enum Ownership {
 
 #[derive(Default, Debug, Clone)]
 pub struct Opts {
-    /// Whether or not `rustfmt` is executed to format generated code.
-    pub rustfmt: bool,
-
     /// Whether or not to emit `tracing` macro calls on function entry/exit.
     pub tracing: bool,
 
@@ -511,32 +506,12 @@ impl Bindgen {
         let exports = mem::take(&mut self.exports.modules);
         self.emit_modules(exports);
 
-        let mut src = mem::take(&mut self.src);
-        if self.opts.rustfmt {
-            let mut child = Command::new("rustfmt")
-                .arg("--edition=2018")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .expect("failed to spawn `rustfmt`");
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(src.as_bytes())
-                .unwrap();
-            src.as_mut_string().truncate(0);
-            child
-                .stdout
-                .take()
-                .unwrap()
-                .read_to_string(src.as_mut_string())
-                .unwrap();
-            let status = child.wait().unwrap();
-            assert!(status.success());
-        }
+        let src = mem::take(&mut self.src);
+        let src = String::from(src);
 
-        Ok(src.into())
+        let src = prettyplease::unparse(&syn::parse_file(&src)?);
+
+        Ok(src)
     }
 
     fn emit_modules(&mut self, modules: Vec<(String, InterfaceName)>) {
@@ -547,9 +522,7 @@ impl Bindgen {
         }
         let mut map = Module::default();
         for (module, name) in modules {
-            let path = match name {
-                InterfaceName::Path(path) => path,
-            };
+            let InterfaceName::Path(path) = name;
             let mut cur = &mut map;
             for name in path[..path.len() - 1].iter() {
                 cur = cur
@@ -610,9 +583,7 @@ impl Bindgen {
         }
         let mut interfaces = Vec::new();
         for (_, name) in self.import_interfaces.iter() {
-            let path = match name {
-                InterfaceName::Path(path) => path,
-            };
+            let InterfaceName::Path(path) = name;
             interfaces.push(path.join("::"));
         }
 
