@@ -280,7 +280,24 @@ impl Bindgen {
                     WorldKey::Name(name) => name,
                     WorldKey::Interface(_) => iface.name.as_ref().unwrap(),
                 };
-                uwriteln!(gen.src, "pub struct {struct_name} {{");
+                // TODO: be more precise using
+                // resolve.interface_direct_deps(*id).filter(|i| { gen.is_imported_interface(*i) })
+                let path_to_root = gen.path_to_root();
+                let mut ideps = Vec::new();
+                for (_, name) in gen.gen.import_interfaces.iter() {
+                    let InterfaceName::Path(path) = name;
+                    ideps.push(path.join("::"));
+                }
+                uwrite!(gen.src, "pub struct {struct_name}<U: ");
+                for (i, idep) in ideps.iter().enumerate() {
+                    if i > 0 {
+                        gen.src.push_str(" + ");
+                    }
+                    gen.src.push_str(&path_to_root);
+                    gen.src.push_str(idep);
+                    gen.src.push_str("::Host");
+                }
+                uwriteln!(gen.src, "> {{");
                 for (_, func) in iface.functions.iter() {
                     uwriteln!(
                         gen.src,
@@ -300,13 +317,22 @@ impl Bindgen {
                 }
                 uwriteln!(gen.src, "}}");
 
-                uwriteln!(gen.src, "impl {struct_name} {{");
+                uwrite!(gen.src, "impl<U: ");
+                for (i, idep) in ideps.iter().enumerate() {
+                    if i > 0 {
+                        gen.src.push_str(" + ");
+                    }
+                    gen.src.push_str(&path_to_root);
+                    gen.src.push_str(idep);
+                    gen.src.push_str("::Host");
+                }
+                uwriteln!(gen.src, "> {struct_name}<U> {{");
                 uwrite!(
                     gen.src,
                     "
                         pub fn new(
                             __exports: &wasm_component_layer::ExportInstance,
-                        ) -> anyhow::Result<{struct_name}> {{
+                        ) -> anyhow::Result<Self> {{
                     "
                 );
                 let mut fields = Vec::new();
@@ -412,12 +438,12 @@ impl Bindgen {
                 let field = format!("interface{}", self.exports.fields.len());
                 self.exports.funcs.push(format!(
                     "
-                        pub fn {method_name}(&self) -> &{path} {{
+                        pub fn {method_name}(&self) -> &{path}<U> {{
                             &self.{field}
                         }}
                     ",
                 ));
-                (field, path, getter)
+                (field, format!("{path}<U>"), getter)
             }
         };
         let prev = self.exports.fields.insert(field, (ty, getter));
@@ -426,10 +452,28 @@ impl Bindgen {
 
     fn build_struct(&mut self, resolve: &Resolve, world: WorldId) {
         let camel = to_rust_upper_camel_case(&resolve.worlds[world].name);
-        uwriteln!(self.src, "pub struct {camel} {{");
+
+        let mut ideps = Vec::new();
+        for (_, name) in self.import_interfaces.iter() {
+            let InterfaceName::Path(path) = name;
+            ideps.push(format!("{}::Host", path.join("::")));
+        }
+        if self.has_world_trait(resolve, world) {
+            let world_camel = to_rust_upper_camel_case(&resolve.worlds[world].name);
+            ideps.push(format!("{world_camel}Imports"));
+        }
+        uwrite!(self.src, "pub struct {camel}<U: ");
+        for (i, idep) in ideps.iter().enumerate() {
+            if i > 0 {
+                self.src.push_str(" + ");
+            }
+            self.src.push_str(idep);
+        }
+        uwriteln!(self.src, "> {{");
         for (name, (ty, _)) in self.exports.fields.iter() {
             uwriteln!(self.src, "{name}: {ty},");
         }
+        uwriteln!(self.src, "_marker: std::marker::PhantomData<U>,");
         self.src.push_str("}\n");
 
         self.toplevel_import_trait(resolve, world);
@@ -443,7 +487,14 @@ impl Bindgen {
             "
         );
 
-        uwriteln!(self.src, "impl {camel} {{");
+        uwrite!(self.src, "impl<U: ");
+        for (i, idep) in ideps.iter().enumerate() {
+            if i > 0 {
+                self.src.push_str(" + ");
+            }
+            self.src.push_str(idep);
+        }
+        uwriteln!(self.src, "> {camel}<U> {{");
         self.toplevel_add_to_linker(resolve, world);
         uwriteln!(
             self.src,
@@ -483,6 +534,7 @@ impl Bindgen {
         for (name, _) in self.exports.fields.iter() {
             uwriteln!(self.src, "{name},");
         }
+        uwriteln!(self.src, "_marker: std::marker::PhantomData::<U>,");
         uwriteln!(self.src, "}})");
         uwriteln!(self.src, "}}"); // close `fn new`
 
@@ -559,16 +611,15 @@ impl Bindgen {
         }
 
         let world_camel = to_rust_upper_camel_case(&resolve.worlds[world].name);
-        uwrite!(self.src, "pub trait {world_camel}Imports");
-        for (i, resource) in get_world_resources(resolve, world).enumerate() {
-            if i == 0 {
-                uwrite!(self.src, ": ");
-            } else {
-                uwrite!(self.src, " + ");
-            }
-            uwrite!(self.src, "Host{}", resource.to_upper_camel_case());
+        uwrite!(self.src, "pub trait {world_camel}Imports {{");
+        for resource in get_world_resources(resolve, world) {
+            uwrite!(
+                self.src,
+                "type {}: Host{};\n",
+                resource.to_upper_camel_case(),
+                resource.to_upper_camel_case()
+            );
         }
-        uwriteln!(self.src, " {{");
         for f in self.import_functions.iter() {
             self.src.push_str(&f.sig);
             self.src.push_str("\n");
@@ -590,32 +641,12 @@ impl Bindgen {
         uwrite!(
             self.src,
             "
-                pub fn add_to_linker<T, U>(
+                pub fn add_to_linker<T>(
                     mut ctx: impl wasm_component_layer::AsContextMut<UserState = T>,
                     linker: &mut wasm_component_layer::Linker,
-                ) -> anyhow::Result<()>
-                    where U: \
+                ) -> anyhow::Result<()> {{
             "
         );
-        let world_camel = to_rust_upper_camel_case(&resolve.worlds[world].name);
-        let world_trait = format!("{world_camel}Imports");
-        for (i, name) in interfaces
-            .iter()
-            .map(|n| format!("{n}::Host"))
-            .chain(if has_world_trait {
-                Some(world_trait.clone())
-            } else {
-                None
-            })
-            .enumerate()
-        {
-            if i > 0 {
-                self.src.push_str(" + ");
-            }
-            self.src.push_str(&name);
-        }
-
-        self.src.push_str(",\n{\n");
         self.src.push_str("let mut ctx = ctx.as_context_mut();\n");
         for name in interfaces.iter() {
             uwriteln!(
@@ -634,28 +665,26 @@ impl Bindgen {
         uwrite!(
             self.src,
             "
-                pub fn add_root_to_linker<T, U>(
+                pub fn add_root_to_linker<T>(
+                    mut ctx: impl wasm_component_layer::AsContextMut<UserState = T>,
                     linker: &mut wasm_component_layer::Linker,
-                    get: impl Fn(&mut T) -> &mut U + Send + Sync + Copy + 'static,
-                ) -> anyhow::Result<()>
-                    where U: {world_trait}
-                {{
-                    let mut linker = linker.root();
+                ) -> anyhow::Result<()> {{
+                    let mut ctx = ctx.as_context_mut();
+                    let root = linker.root();
             ",
         );
-        // for name in get_world_resources(resolve, world) {
-        //     let camel = name.to_upper_camel_case();
-        //     uwriteln!(
-        //         self.src,
-        //         "linker.resource(
-        //             \"{name}\",
-        //             wasmtime::component::ResourceType::host::<{camel}>(),
-        //             move |mut store, rep| -> anyhow::Result<()> {{
-        //                 Host{camel}::drop(get(store.data_mut()), wasmtime::component::Resource::new_own(rep))
-        //             }},
-        //         )?;"
-        //     )
-        // }
+
+        for name in get_world_resources(resolve, world) {
+            let camel = name.to_upper_camel_case();
+
+            uwriteln!(
+                self.src,
+                "inst.define_resource(
+                    \"{name}\",
+                    <Host{camel}Resource<U::{camel}> as wasm_component_layer::Resource>::ty(),
+                )?;"
+            )
+        }
 
         for f in self.import_functions.iter() {
             self.src.push_str(&f.add_to_linker);
@@ -1527,6 +1556,7 @@ impl<'a> InterfaceGenerator<'a> {
     }
 
     fn type_alias(&mut self, id: TypeId, _name: &str, ty: &Type, docs: &Docs) {
+        // TODO: handle alias causes issues here
         let info = self.info(id);
         for (name, mode) in self.modes_of(id) {
             self.rustdoc(docs);
