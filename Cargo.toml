@@ -18,13 +18,13 @@ ref-cast = { version = "1.0.23", default-features = false }
 semver = { version = "1.0.23", default-features = false, features = [ "std" ] }
 serde = { version = "1.0.204", optional = true, default-features = false, features = [ "derive", "rc" ] }
 slab = { version = "0.4.9", default-features = false }
-wasm_runtime_layer = { version = "0.4.0", default-features = false }
+wasm_runtime_layer = { version = "0.5.0", default-features = false }
 wasmtime-environ = { version = "22.0.0", features = [ "compile", "component-model" ] }
-wit-component = { version = "0.211.0", default-features = false }
-wit-parser = { version = "0.211.0", default-features = false }
+wit-component = { version = "0.214.0", default-features = false }
+wit-parser = { version = "0.214.0", default-features = false }
 
 [features]
 serde = [ "dep:serde", "semver/serde" ]
 
 [dev-dependencies]
-wasmi_runtime_layer = { version = "0.31.0" }
+wasmi_runtime_layer = { version = "0.44.0" }
