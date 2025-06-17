@@ -2006,11 +2006,11 @@ impl Instance {
                     .instance_flags
                     .try_lock()
                     .expect("Could not get access to instance flags.");
-                    let global = loop {
-                        if let Some(global) = instance_flags.get(*i) {
-                            break global.clone();
-                        }
-                        instance_flags.push(Global::new(
+                let global = loop {
+                    if let Some(global) = instance_flags.get(*i) {
+                        break global.clone();
+                    }
+                    instance_flags.push(Global::new(
                         ctx.as_context_mut().inner,
                         wasm_runtime_layer::Value::I32(
                             wasmtime_environ::component::FLAG_MAY_LEAVE

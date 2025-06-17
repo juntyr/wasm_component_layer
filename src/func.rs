@@ -437,50 +437,58 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             Instruction::I32Load { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
-                results.push(Value::S32(self.load((x as usize) + (*offset as usize))?))
+                results.push(Value::S32(
+                    self.load(addr_as_usize(x) + (*offset as usize))?
+                ))
             ),
             Instruction::I32Load8U { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
                 results.push(Value::S32(
-                    self.load::<u8>((x as usize) + (*offset as usize))? as i32
+                    self.load::<u8>(addr_as_usize(x) + (*offset as usize))? as i32
                 ))
             ),
             Instruction::I32Load8S { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
                 results.push(Value::S32(
-                    self.load::<i8>((x as usize) + (*offset as usize))? as i32
+                    self.load::<i8>(addr_as_usize(x) + (*offset as usize))? as i32
                 ))
             ),
             Instruction::I32Load16U { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
                 results.push(Value::S32(
-                    self.load::<u16>((x as usize) + (*offset as usize))? as i32
+                    self.load::<u16>(addr_as_usize(x) + (*offset as usize))? as i32
                 ))
             ),
             Instruction::I32Load16S { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
                 results.push(Value::S32(
-                    self.load::<i16>((x as usize) + (*offset as usize))? as i32
+                    self.load::<i16>(addr_as_usize(x) + (*offset as usize))? as i32
                 ))
             ),
             Instruction::I64Load { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
-                results.push(Value::S64(self.load((x as usize) + (*offset as usize))?))
+                results.push(Value::S64(
+                    self.load(addr_as_usize(x) + (*offset as usize))?
+                ))
             ),
             Instruction::F32Load { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
-                results.push(Value::F32(self.load((x as usize) + (*offset as usize))?))
+                results.push(Value::F32(
+                    self.load(addr_as_usize(x) + (*offset as usize))?
+                ))
             ),
             Instruction::F64Load { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
-                results.push(Value::F64(self.load((x as usize) + (*offset as usize))?))
+                results.push(Value::F64(
+                    self.load(addr_as_usize(x) + (*offset as usize))?
+                ))
             ),
             Instruction::I32Store { offset } => require_matches!(
                 operands.pop(),
@@ -488,7 +496,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::S32(x)),
-                    self.store((address as usize) + (*offset as usize), x)?
+                    self.store(addr_as_usize(address) + (*offset as usize), x)?
                 )
             ),
             Instruction::I32Store8 { offset } => require_matches!(
@@ -497,7 +505,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::S32(x)),
-                    self.store((address as usize) + (*offset as usize), x as u8)?
+                    self.store(addr_as_usize(address) + (*offset as usize), x as u8)?
                 )
             ),
             Instruction::I32Store16 { offset } => require_matches!(
@@ -506,7 +514,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::S32(x)),
-                    self.store((address as usize) + (*offset as usize), x as u16)?
+                    self.store(addr_as_usize(address) + (*offset as usize), x as u16)?
                 )
             ),
             Instruction::I64Store { offset } => require_matches!(
@@ -515,7 +523,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::S64(x)),
-                    self.store((address as usize) + (*offset as usize), x)?
+                    self.store(addr_as_usize(address) + (*offset as usize), x)?
                 )
             ),
             Instruction::F32Store { offset } => require_matches!(
@@ -524,7 +532,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::F32(x)),
-                    self.store((address as usize) + (*offset as usize), x)?
+                    self.store(addr_as_usize(address) + (*offset as usize), x)?
                 )
             ),
             Instruction::F64Store { offset } => require_matches!(
@@ -533,7 +541,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::F64(x)),
-                    self.store((address as usize) + (*offset as usize), x)?
+                    self.store(addr_as_usize(address) + (*offset as usize), x)?
                 )
             ),
             Instruction::I32FromChar => require_matches!(
@@ -681,7 +689,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 let ptr = require_matches!(&res[0], wasm_runtime_layer::Value::I32(x), *x);
 
                 let memory = self.memory.as_ref().expect("No memory.");
-                memory.write(&mut self.ctx.as_context_mut().inner, ptr as usize, &encoded)?;
+                memory.write(
+                    &mut self.ctx.as_context_mut().inner,
+                    addr_as_usize(ptr),
+                    &encoded,
+                )?;
 
                 results.push(Value::S32(ptr));
                 results.push(Value::S32(encoded.len() as i32));
@@ -706,16 +718,16 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 let ptr = require_matches!(res[0], wasm_runtime_layer::Value::I32(x), x);
 
                 match element {
-                    Type::U8 => self.store_array(ptr as usize, list.typed::<u8>()?)?,
-                    Type::U16 => self.store_array(ptr as usize, list.typed::<u16>()?)?,
-                    Type::U32 => self.store_array(ptr as usize, list.typed::<u32>()?)?,
-                    Type::U64 => self.store_array(ptr as usize, list.typed::<u64>()?)?,
-                    Type::S8 => self.store_array(ptr as usize, list.typed::<i8>()?)?,
-                    Type::S16 => self.store_array(ptr as usize, list.typed::<i16>()?)?,
-                    Type::S32 => self.store_array(ptr as usize, list.typed::<i32>()?)?,
-                    Type::S64 => self.store_array(ptr as usize, list.typed::<i64>()?)?,
-                    Type::F32 => self.store_array(ptr as usize, list.typed::<f32>()?)?,
-                    Type::F64 => self.store_array(ptr as usize, list.typed::<f64>()?)?,
+                    Type::U8 => self.store_array(addr_as_usize(ptr), list.typed::<u8>()?)?,
+                    Type::U16 => self.store_array(addr_as_usize(ptr), list.typed::<u16>()?)?,
+                    Type::U32 => self.store_array(addr_as_usize(ptr), list.typed::<u32>()?)?,
+                    Type::U64 => self.store_array(addr_as_usize(ptr), list.typed::<u64>()?)?,
+                    Type::S8 => self.store_array(addr_as_usize(ptr), list.typed::<i8>()?)?,
+                    Type::S16 => self.store_array(addr_as_usize(ptr), list.typed::<i16>()?)?,
+                    Type::S32 => self.store_array(addr_as_usize(ptr), list.typed::<i32>()?)?,
+                    Type::S64 => self.store_array(addr_as_usize(ptr), list.typed::<i64>()?)?,
+                    Type::F32 => self.store_array(addr_as_usize(ptr), list.typed::<f32>()?)?,
+                    Type::F64 => self.store_array(addr_as_usize(ptr), list.typed::<f64>()?)?,
                     _ => unreachable!(),
                 }
 
@@ -760,7 +772,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::S32(ptr)),
-                    memory.read(&self.ctx.as_context().inner, ptr as usize, &mut result)?
+                    memory.read(
+                        &self.ctx.as_context().inner,
+                        addr_as_usize(ptr),
+                        &mut result
+                    )?
                 );
 
                 match self.encoding {
@@ -790,16 +806,36 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 let ptr = require_matches!(operands.pop(), Some(Value::S32(x)), x);
 
                 results.push(Value::List(match element {
-                    Type::U8 => self.load_array::<u8>(ptr as usize, len as usize)?.into(),
-                    Type::U16 => self.load_array::<u16>(ptr as usize, len as usize)?.into(),
-                    Type::U32 => self.load_array::<u32>(ptr as usize, len as usize)?.into(),
-                    Type::U64 => self.load_array::<u64>(ptr as usize, len as usize)?.into(),
-                    Type::S8 => self.load_array::<i8>(ptr as usize, len as usize)?.into(),
-                    Type::S16 => self.load_array::<i16>(ptr as usize, len as usize)?.into(),
-                    Type::S32 => self.load_array::<i32>(ptr as usize, len as usize)?.into(),
-                    Type::S64 => self.load_array::<i64>(ptr as usize, len as usize)?.into(),
-                    Type::F32 => self.load_array::<f32>(ptr as usize, len as usize)?.into(),
-                    Type::F64 => self.load_array::<f64>(ptr as usize, len as usize)?.into(),
+                    Type::U8 => self
+                        .load_array::<u8>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::U16 => self
+                        .load_array::<u16>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::U32 => self
+                        .load_array::<u32>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::U64 => self
+                        .load_array::<u64>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::S8 => self
+                        .load_array::<i8>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::S16 => self
+                        .load_array::<i16>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::S32 => self
+                        .load_array::<i32>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::S64 => self
+                        .load_array::<i64>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::F32 => self
+                        .load_array::<f32>(addr_as_usize(ptr), len as usize)?
+                        .into(),
+                    Type::F64 => self
+                        .load_array::<f64>(addr_as_usize(ptr), len as usize)?
+                        .into(),
                     _ => unreachable!(),
                 }));
             }
@@ -1441,4 +1477,8 @@ impl<T, E: backend::WasmEngine> Default for FuncVec<T, E> {
             functions: Vec::new(),
         }
     }
+}
+
+fn addr_as_usize(addr: i32) -> usize {
+    u32::from_ne_bytes(addr.to_ne_bytes()) as usize
 }
