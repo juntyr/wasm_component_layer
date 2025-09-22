@@ -8,7 +8,7 @@ edition = "2021"
 forced-target = "wasm32-unknown-unknown"
 
 [dependencies]
-wit-bindgen = { version = "0.37.0" }
+wit-bindgen = { version = "0.46.0" }
 
 [lib]
 crate-type = ["cdylib"]

@@ -2,7 +2,6 @@ use std::marker::*;
 use std::mem::*;
 use std::sync::atomic::*;
 use std::sync::*;
-use std::usize;
 
 use bytemuck::*;
 use wasm_runtime_layer::*;
@@ -1434,12 +1433,12 @@ type FunctionBacking<T, E> =
 type FunctionBackingKeyPair<T, E> = (Arc<AtomicUsize>, Arc<FunctionBacking<T, E>>);
 
 /// A vector for functions that automatically drops items when the references are dropped.
-pub(crate) struct FuncVec<T, E: backend::WasmEngine> {
+pub(crate) struct FuncVec<T: 'static, E: backend::WasmEngine> {
     /// The functions stored in the vector.
     functions: Vec<FunctionBackingKeyPair<T, E>>,
 }
 
-impl<T, E: backend::WasmEngine> FuncVec<T, E> {
+impl<T: 'static, E: backend::WasmEngine> FuncVec<T, E> {
     /// Pushes a new function into the vector.
     pub fn push(
         &mut self,
@@ -1471,7 +1470,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
     }
 }
 
-impl<T, E: backend::WasmEngine> Default for FuncVec<T, E> {
+impl<T: 'static, E: backend::WasmEngine> Default for FuncVec<T, E> {
     fn default() -> Self {
         Self {
             functions: Vec::new(),

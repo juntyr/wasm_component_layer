@@ -340,7 +340,7 @@ impl RecordType {
     pub fn field_ty(&self, name: impl AsRef<str>) -> Option<ValueType> {
         self.fields
             .iter()
-            .filter(|&(_, x, _val)| (&**x == name.as_ref()))
+            .filter(|&(_, x, _val)| &**x == name.as_ref())
             .map(|(_, _x, val)| val.clone())
             .next()
     }
@@ -796,9 +796,9 @@ static RESOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Describes the type of a resource. This may either be:
 ///
 /// - An abstract guest resource, associated with a component. Abstract resources
-/// cannot be used to instantiate any values.
+///   cannot be used to instantiate any values.
 /// - An instantiated guest resource, associated with an instance. Instantiated guest
-/// resources identify resources created by WASM.
+///   resources identify resources created by WASM.
 /// - A host resource, which is associated with a native value.
 #[derive(Clone, Debug)]
 pub struct ResourceType {
