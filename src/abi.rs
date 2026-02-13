@@ -56,10 +56,15 @@ fn align_to(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
 }
 
+/// wasm32 primitive types
 pub enum Wasm32Type {
+    /// [`i32`]
     I32,
+    /// [`i64`]
     I64,
+    /// [`f32`]
     F32,
+    /// [`f64`]
     F64,
 }
 

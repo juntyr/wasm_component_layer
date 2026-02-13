@@ -1044,11 +1044,12 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 {
                     Value::Variant(x) => (x.discriminant(), x.value()),
                     Value::Enum(x) => (x.discriminant(), None),
-                    Value::Option(x) => {
-                        (x.is_some().then_some(1).unwrap_or_default(), (*x).clone())
-                    }
+                    Value::Option(x) => (
+                        if x.is_some() { 1 } else { Default::default() },
+                        (*x).clone(),
+                    ),
                     Value::Result(x) => (
-                        x.is_err().then_some(1).unwrap_or_default(),
+                        if x.is_err() { 1 } else { Default::default() },
                         match &*x {
                             std::result::Result::Ok(y) => y,
                             std::result::Result::Err(y) => y,
@@ -1478,6 +1479,8 @@ impl<T: 'static, E: backend::WasmEngine> Default for FuncVec<T, E> {
     }
 }
 
+/// Convert an `addr`, represented as [`i32`] like everything in WASM, into a
+/// [`usize`].
 fn addr_as_usize(addr: i32) -> usize {
     u32::from_ne_bytes(addr.to_ne_bytes()) as usize
 }
